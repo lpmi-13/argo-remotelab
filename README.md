@@ -17,9 +17,9 @@ A hands-on ArgoCD troubleshooting environment that randomly injects realistic Gi
 | Scenario | What Breaks | How to Fix |
 |----------|-------------|------------|
 | **Missing ConfigMap** | Deployment references a non-existent ConfigMap | Restore the ConfigMap reference |
-| **SOPS Decrypt Failure** | SOPS age data-key block corrupted in encrypted secrets file | Restore the encrypted file or recreate it from known plaintext |
+| **SOPS Decrypt Failure** | SOPS age data-key block corrupted in encrypted secrets file | Recreate the plaintext and encrypt a fresh file |
 | **SOPS Global MAC Mismatch** | Only the `sops.mac` metadata value is corrupted | Decrypt with `sops --ignore-mac`, then re-encrypt |
-| **HMAC Mismatch** | Encrypted secret value ciphertext is tampered | Restore or re-encrypt the secrets file from known-good plaintext |
+| **HMAC Mismatch** | Encrypted secret value ciphertext is tampered | Re-encrypt the secrets file from known-good plaintext |
 | **Wrong Type in SOPS** | Encrypted `secrets` value is randomized to a wrong shape | Re-encrypt the file with `secrets` as a valid env-var map |
 | **Stuck Sync** | Health check path changed to non-existent endpoint, pods never become Ready | Fix the health check path in values.yaml |
 | **Stale Job** | PreSync migration Job template changed so the hook fails before sync | Restore the migration Job command and re-sync |
@@ -152,36 +152,57 @@ kubectl describe pod -n applications -l app=django
 
 ### Fixing Issues
 
-Most fixes involve editing the Helm chart in the internal Gitea git repository. No Gitea browser UI is required for the learner path.
+Most fixes involve editing the Helm chart in the internal Gitea git repository. No Gitea browser UI is required for the learner path. If you want to work one issue at a time without the controller immediately injecting the next scenario, pause it first:
 
 ```bash
-# Clone the repo locally (port-forward first)
+kubectl scale deployment/scenario-controller -n applications --replicas=0
+```
+
+Resume the lab later with:
+
+```bash
+kubectl scale deployment/scenario-controller -n applications --replicas=1
+```
+
+Use the Application annotation to see which scenario is active:
+
+```bash
+kubectl get application django-app -n argocd \
+  -o jsonpath='{.metadata.annotations.remotelab\.io/current-scenario}{"\n"}'
+```
+
+```bash
+# Clone the repo locally. deploy-all.sh leaves this port-forward running; start
+# it yourself only if localhost:3000 is not already reachable.
 kubectl port-forward svc/gitea -n applications 3000:3000 &
 git clone http://remotelab:remotelab@localhost:3000/remotelab/django-app.git /tmp/fix
 cd /tmp/fix
 
-# Make your fix (e.g., restore values.yaml)
-vi chart/django-app/values.yaml
-
-# For SOPS-encrypted YAML files, pass explicit input/output types because the
-# .enc suffix is otherwise ambiguous to sops.
-export SOPS_AGE_KEY_FILE=path/to/secrets/keys/local.key
-sops --input-type yaml --output-type yaml chart/django-app/secrets.yaml.enc
-
-# Push the fix
+# Make the scenario-specific fix, then push it.
 git add -A && git commit -m "fix: restore broken config" && git push
+
+# Ask ArgoCD to refresh immediately instead of waiting for the poll interval.
+kubectl annotate application django-app -n argocd \
+  argocd.argoproj.io/refresh=hard --overwrite
 ```
 
-ArgoCD will automatically detect the change and re-sync.
+ArgoCD will automatically detect the change and re-sync. The hard refresh just speeds up the feedback loop.
 
-#### SOPS Decrypt Failure
+For SOPS-encrypted YAML files, pass explicit input/output types because the
+`.enc` suffix is otherwise ambiguous to `sops`:
 
-If the scenario corrupted the age-encrypted SOPS data key, SOPS cannot recover
-the encrypted values from the broken file. Fix it either by restoring a known
-good encrypted version from Git history, or by recreating the plaintext and
-encrypting a fresh `secrets.yaml.enc`.
+```bash
+LAB_REPO=/home/adam/projects/argo-remotelab
+export SOPS_AGE_KEY_FILE="$LAB_REPO/secrets/keys/local.key"
+sops --decrypt --input-type yaml --output-type yaml chart/django-app/secrets.yaml.enc
+```
 
-The lab's original plaintext values are:
+The SOPS scenarios intentionally force-push the broken state as a new root
+commit on `main`. That removes the easy `git restore HEAD~1 --
+chart/django-app/secrets.yaml.enc` path from the learner repository and better
+matches environments where an old encrypted blob is no longer a valid repair.
+
+The lab's original plaintext secret values are:
 
 ```yaml
 secrets:
@@ -190,7 +211,7 @@ secrets:
   API_TOKEN: "tok_prod_abc123def456"
 ```
 
-To re-encrypt from that plaintext:
+To re-encrypt from that plaintext, write the plaintext to a temporary file and encrypt it with the generated age public key:
 
 ```bash
 cat > /tmp/remotelab-secrets.yaml <<'EOF'
@@ -209,11 +230,36 @@ sops --encrypt --age "$age_public_key" \
   /tmp/remotelab-secrets.yaml > chart/django-app/secrets.yaml.enc
 ```
 
+#### Missing ConfigMap
+
+Symptoms:
+- `kubectl describe pod -n applications -l app=django` reports that `django-app-missing-config` was not found.
+- The Deployment has pods stuck in `CreateContainerConfigError` or a similar startup state.
+
+Fix:
+1. Edit `chart/django-app/templates/deployment.yaml`.
+2. Restore the `envFrom.configMapRef.name` value to `{{ include "django-app.fullname" . }}-config`.
+3. Commit and push. ArgoCD should render the original ConfigMap reference and start new pods.
+
+#### SOPS Decrypt Failure
+
+Symptoms:
+- The Application sync status is `Unknown`.
+- Repo-server logs contain `Failed to get the data key required to decrypt the SOPS file`.
+
+The age-encrypted SOPS data key is damaged, so the broken file cannot recover its plaintext. Recreate the known plaintext and encrypt a fresh `secrets.yaml.enc` using the helper commands above. Verify the new file before pushing:
+
+```bash
+sops --decrypt --input-type yaml --output-type yaml chart/django-app/secrets.yaml.enc
+```
+
 #### SOPS Global MAC Mismatch
 
-If only the global `sops.mac` metadata is corrupted, the encrypted values and
-data key are still recoverable. In that case, decrypt with MAC verification
-disabled, inspect the plaintext, then re-encrypt it so SOPS writes a new MAC:
+Symptoms:
+- Repo-server logs report a SOPS MAC verification failure.
+- The encrypted values still decrypt if MAC verification is disabled.
+
+Only the global `sops.mac` metadata is corrupted. Decrypt with MAC verification disabled, inspect the plaintext, then re-encrypt it so SOPS writes a new MAC:
 
 ```bash
 LAB_REPO=/home/adam/projects/argo-remotelab
@@ -229,28 +275,109 @@ sops --encrypt --age "$age_public_key" \
   /tmp/remotelab-secrets.yaml > chart/django-app/secrets.yaml.enc
 ```
 
-For scenarios requiring resource deletion (stale Job, orphaned resources):
-- Use the ArgoCD UI to delete specific resources
-- Or use kubectl, for example:
-  `kubectl delete job <name> -n applications` or
-  `kubectl delete deployment django-web -n applications`
-- If a failed hook sync keeps retrying after the git fix, terminate the running
-  ArgoCD operation in the UI, or patch the Application with:
-  `kubectl patch application django-app -n argocd --type=merge -p '{"operation":null}'`
+#### HMAC Mismatch
+
+Symptoms:
+- Repo-server logs contain `Could not decrypt with AES_GCM: cipher: message authentication failed`.
+- `sops --ignore-mac` does not recover the damaged value, because the individual encrypted value authentication fails.
+
+Fix it the same way as a data-key corruption: re-encrypt `chart/django-app/secrets.yaml.enc` from the lab plaintext shown above.
+
+#### Wrong Type In SOPS
+
+Symptoms:
+- The encrypted file decrypts, but `.Values.secrets` is a string, list, integer, or a map with an invalid environment variable name.
+- ArgoCD may fail during Helm rendering, Kubernetes apply, or pod startup depending on the injected variant.
+
+Inspect the decrypted values:
+
+```bash
+sops --decrypt --input-type yaml --output-type yaml chart/django-app/secrets.yaml.enc
+```
+
+Fix by re-encrypting `secrets.yaml.enc` so the top-level `secrets` value is a map of valid environment variable names to scalar strings:
+
+```yaml
+secrets:
+  DB_PASSWORD: "remotelab"
+  SECRET_KEY: "django-production-secret-key-argo-remotelab-2024"
+  API_TOKEN: "tok_prod_abc123def456"
+```
+
+#### Stuck Sync
+
+Symptoms:
+- Pods are created but never become Ready.
+- `kubectl describe pod -n applications -l app=django` shows readiness or liveness probe failures against `/api/nonexistent/`.
+- The Application health stays `Progressing`.
+
+Fix:
+1. Edit `chart/django-app/values.yaml`.
+2. Restore `healthCheck.path` to `/api/health/`.
+3. Commit and push.
+4. If ArgoCD still shows a running operation after the new commit, terminate the operation in the UI or run:
+
+```bash
+kubectl patch application django-app -n argocd --type=merge -p '{"operation":null}'
+```
+
+#### Stale Job
+
+Symptoms:
+- The PreSync migration hook Job fails.
+- `kubectl logs -n applications -l app.kubernetes.io/component=migration --tail=50` contains `ERROR: migration dependency check failed`.
+
+Fix:
+1. Edit `chart/django-app/templates/migrate-job.yaml`.
+2. Remove the injected failing lines so the command starts with:
+
+```bash
+set -e
+echo "Running Django migrations..."
+python manage.py migrate --noinput
+```
+
+3. Edit `chart/django-app/templates/deployment.yaml` and remove the injected `remotelab.io/stale-job-trigger: "enabled"` annotation if present.
+4. Commit and push.
+5. If ArgoCD is still stuck on the failed hook, terminate the operation or delete the failed hook Job:
+
+```bash
+kubectl patch application django-app -n argocd --type=merge -p '{"operation":null}'
+kubectl delete job -n applications -l app.kubernetes.io/component=migration
+```
+
+#### Orphaned Resource
+
+Symptoms:
+- Both `django` and `django-web` Deployments may exist.
+- `kubectl get svc,endpoints -n applications django` shows no endpoints.
+- The Service selector points at `app: django-web`, but the rendered pods still use the normal chart labels.
+
+Fix:
+1. Edit `chart/django-app/templates/deployment.yaml` and restore `metadata.name` to `django`.
+2. Edit `chart/django-app/templates/service.yaml` and restore the selector helper:
+
+```yaml
+selector:
+  {{- include "django-app.selectorLabels" . | nindent 4 }}
+```
+
+3. Commit and push.
+4. Because prune is disabled for the lab Application, delete the orphaned Deployment after the desired state is correct:
+
+```bash
+kubectl delete deployment django-web -n applications --ignore-not-found=true
+```
 
 ### After a Fix
 
 The controller detects the app is healthy again and logs the explanation:
 
 ```
-application is Healthy and Synced again!
-=== SCENARIO EXPLANATION: sops-decrypt-failure ===
-what happened: The age-encrypted SOPS data key in secrets.yaml.enc was corrupted...
-how to fix: Restore the encrypted file from history, or recreate secrets.yaml
-from the known lab plaintext and encrypt a fresh secrets.yaml.enc...
-diagnostic commands:
-  $ kubectl get applications -n argocd django-app -o jsonpath='{.status.conditions}'
-  $ kubectl logs -n argocd -l app.kubernetes.io/name=argocd-repo-server --tail=50
+application is Healthy and Synced
+=== SCENARIO RESOLVED: sops-decrypt-failure ===
+explanation: The age-encrypted SOPS data key in secrets.yaml.enc was corrupted...
+--- cycle complete, starting next round ---
 ```
 
 Then it waits another random interval before injecting the next failure.

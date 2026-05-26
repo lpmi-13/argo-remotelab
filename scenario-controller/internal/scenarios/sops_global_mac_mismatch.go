@@ -22,7 +22,7 @@ func (s *SopsGlobalMACMismatch) Description() string {
 }
 
 func (s *SopsGlobalMACMismatch) Inject(gitClient *git.Client) error {
-	return gitClient.CloneAndModify(
+	return gitClient.CloneAndModifyOrphan(
 		"chore: update encrypted secrets metadata",
 		func(w *git.WorkDir) error {
 			data, err := w.ReadFile(SecretsFile)

@@ -105,6 +105,17 @@ func (w *WorkDir) Cleanup() {
 // CloneAndModify clones the repo, calls the modifier function to make changes,
 // then commits and pushes. This is the primary way scenarios interact with git.
 func (c *Client) CloneAndModify(commitMsg string, modifier func(w *WorkDir) error) error {
+	return c.cloneAndModify(commitMsg, modifier, false)
+}
+
+// CloneAndModifyOrphan clones the repo, applies changes, then force-pushes the
+// result as a new root commit on main. SOPS integrity scenarios use this to
+// avoid leaving an obvious previous good encrypted blob in branch history.
+func (c *Client) CloneAndModifyOrphan(commitMsg string, modifier func(w *WorkDir) error) error {
+	return c.cloneAndModify(commitMsg, modifier, true)
+}
+
+func (c *Client) cloneAndModify(commitMsg string, modifier func(w *WorkDir) error, replaceHistory bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -136,6 +147,12 @@ func (c *Client) CloneAndModify(commitMsg string, modifier func(w *WorkDir) erro
 		return fmt.Errorf("modifier function failed: %w", err)
 	}
 
+	if replaceHistory {
+		if err := runGit(tmpDir, "checkout", "--orphan", "scenario-rewrite"); err != nil {
+			return fmt.Errorf("git checkout orphan failed: %w", err)
+		}
+	}
+
 	// Stage all changes.
 	if err := runGit(tmpDir, "add", "-A"); err != nil {
 		return fmt.Errorf("git add failed: %w", err)
@@ -153,9 +170,19 @@ func (c *Client) CloneAndModify(commitMsg string, modifier func(w *WorkDir) erro
 	}
 
 	// Push.
-	log.Println("git: pushing changes")
-	if err := runGit(tmpDir, "push", "origin", "main"); err != nil {
-		return fmt.Errorf("git push failed: %w", err)
+	if replaceHistory {
+		if err := runGit(tmpDir, "branch", "-M", "main"); err != nil {
+			return fmt.Errorf("git branch rename failed: %w", err)
+		}
+		log.Println("git: force pushing rewritten main history")
+		if err := runGit(tmpDir, "push", "--force", "origin", "main"); err != nil {
+			return fmt.Errorf("git force push failed: %w", err)
+		}
+	} else {
+		log.Println("git: pushing changes")
+		if err := runGit(tmpDir, "push", "origin", "main"); err != nil {
+			return fmt.Errorf("git push failed: %w", err)
+		}
 	}
 
 	log.Println("git: changes pushed successfully")

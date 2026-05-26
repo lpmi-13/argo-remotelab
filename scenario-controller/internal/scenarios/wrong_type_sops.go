@@ -62,7 +62,7 @@ func (s *WrongTypeSops) Description() string {
 }
 
 func (s *WrongTypeSops) Inject(gitClient *git.Client) error {
-	return gitClient.CloneAndModify(
+	return gitClient.CloneAndModifyOrphan(
 		"chore: update database secrets",
 		func(w *git.WorkDir) error {
 			ageKey := gitClient.SopsAgeKey()

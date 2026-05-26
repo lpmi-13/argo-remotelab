@@ -22,7 +22,7 @@ func (s *SopsDecryptFailure) Description() string {
 }
 
 func (s *SopsDecryptFailure) Inject(gitClient *git.Client) error {
-	return gitClient.CloneAndModify(
+	return gitClient.CloneAndModifyOrphan(
 		"chore: update encrypted secrets",
 		func(w *git.WorkDir) error {
 			data, err := w.ReadFile(SecretsFile)
@@ -88,8 +88,9 @@ func (s *SopsDecryptFailure) Explanation() string {
 	return "The age-encrypted SOPS data key in secrets.yaml.enc was corrupted. SOPS can " +
 		"still identify the file as encrypted, but it cannot decrypt the data key needed " +
 		"to read the secret values, so helm-secrets fails during ArgoCD manifest " +
-		"generation. The fix is to restore the encrypted file from git history, or " +
-		"recreate the known plaintext secrets and encrypt a fresh file with: " +
+		"generation. This scenario rewrites the branch history around the bad SOPS file, " +
+		"so the intended fix is to recreate the known plaintext secrets and encrypt a " +
+		"fresh file with: " +
 		"sops --encrypt --age <public-key> --input-type yaml --output-type yaml " +
 		"secrets.yaml > secrets.yaml.enc"
 }

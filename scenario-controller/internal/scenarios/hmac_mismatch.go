@@ -22,7 +22,7 @@ func (s *HMACMismatch) Description() string {
 }
 
 func (s *HMACMismatch) Inject(gitClient *git.Client) error {
-	return gitClient.CloneAndModify(
+	return gitClient.CloneAndModifyOrphan(
 		"chore: update encrypted secrets configuration",
 		func(w *git.WorkDir) error {
 			data, err := w.ReadFile(SecretsFile)
@@ -118,8 +118,9 @@ func (s *HMACMismatch) Revert(gitClient *git.Client) error {
 func (s *HMACMismatch) Explanation() string {
 	return "Encrypted secret value bytes in secrets.yaml.enc were modified. This is not " +
 		"recoverable with sops --ignore-mac because the individual value ciphertext no " +
-		"longer passes AES-GCM authentication. The fix is to restore the encrypted file " +
-		"from history or re-encrypt secrets.yaml.enc from known-good plaintext."
+		"longer passes AES-GCM authentication. This scenario rewrites the branch history " +
+		"around the bad SOPS file, so the intended fix is to re-encrypt secrets.yaml.enc " +
+		"from known-good plaintext."
 }
 
 func (s *HMACMismatch) DiagnoseCommands() []string {
