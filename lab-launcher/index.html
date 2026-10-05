@@ -23,7 +23,7 @@
 <header>✦ Argo CD RemoteLab</header>
 <main>
   <h1>Learn the Argo CD console</h1>
-  <p>Choose a mission. The lab prepares a reproducible deployment, then opens Argo CD with a coach.</p>
+  <p>Choose a mission. The coach opens the briefing while the lab prepares the deployment.</p>
   <section class="card" aria-label="Start a mission">
     <form id="launch-form">
       <input type="hidden" id="seed" name="seed">
@@ -73,23 +73,17 @@
       const response=await fetch(api+'/api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
       const result=await response.json();if(!response.ok)throw new Error(result.error||'Could not create run');
       const {run,session}=result;
-      const deadline=Date.now()+8*60*1000;
-      while(Date.now()<deadline){
-        const current=await get('/api/runs/'+encodeURIComponent(run.id));
-        if(current.state==='READY'){
-          const url=new URL('/argocd/applications',location.origin);
-          url.searchParams.set('coach_session',session.session_id);
-          url.searchParams.set('coach_token',session.connection_token);
-          url.searchParams.set('coach_run',run.id);
-          url.searchParams.set('coach_mode',payload.mode);
-          location.assign(url);
-          return;
-        }
-        if(current.state==='FAILED')throw new Error(current.error||'Lab preparation failed');
-        status.textContent=`Preparing… ${current.state.toLowerCase().replaceAll('_',' ')}`;
-        await new Promise(resolve=>setTimeout(resolve,2500));
-      }
-      throw new Error('Lab preparation timed out');
+      const {connection_token:token,...initialView}=session;
+      const previous=JSON.parse(sessionStorage.getItem('argo-coach:handoff')||'null');
+      if(previous?.session)sessionStorage.removeItem('argo-coach:initial-view:'+previous.session);
+      sessionStorage.setItem('argo-coach:initial-view:'+session.session_id,JSON.stringify(initialView));
+      status.textContent='Opening the briefing…';
+      const url=new URL('/argocd/applications',location.origin);
+      url.searchParams.set('coach_session',session.session_id);
+      url.searchParams.set('coach_token',token);
+      url.searchParams.set('coach_run',run.id);
+      url.searchParams.set('coach_mode',payload.mode);
+      location.assign(url);
     }catch(reason){status.textContent=reason.message;status.classList.add('error');button.disabled=false}
   });
   document.querySelector('#scenario').addEventListener('change',event=>{

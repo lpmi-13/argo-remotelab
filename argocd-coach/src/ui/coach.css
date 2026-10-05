@@ -3,6 +3,7 @@
 button, input, textarea { font: inherit; }
 button { cursor: pointer; border-radius: var(--coach-button-radius); min-height: 34px;
   padding: var(--coach-button-padding); font-size: var(--coach-button-size); font-weight: var(--coach-button-weight); text-transform: uppercase; }
+button:disabled { opacity: .5; cursor: wait; }
 button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--coach-accent); outline-offset: 2px; }
 .panel { position: fixed; z-index: 2147483000; right: 20px; top: 72px; width: min(380px, calc(100vw - 32px));
   max-height: calc(100vh - 92px); overflow: auto; background: var(--coach-surface); color: var(--coach-text);
@@ -94,7 +95,14 @@ a.secondary { display: inline-flex; align-items: center; padding: var(--coach-bu
 .brief-section h3 { margin-bottom: 5px; color: var(--coach-accent-text); font-size: 12px; letter-spacing: .055em; text-transform: uppercase; }
 .brief-section p { margin: 0; font-size: 15px; line-height: 1.5; }
 .brief-objective { margin-top: 4px; padding: 14px; border: 1px solid var(--coach-border); border-left: 4px solid var(--coach-accent); border-radius: var(--coach-radius); background: var(--coach-page); }
-.brief-footer { display: flex; justify-content: flex-end; padding: 14px 24px; border-top: 1px solid var(--coach-border); }
+.brief-progress { padding: 0 24px 18px; }
+.brief-progress-copy { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 7px; color: var(--coach-muted); font-size: 12px; }
+.brief-progress-copy strong { color: var(--coach-text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.brief-progress-track { height: 8px; overflow: hidden; border-radius: 6px; background: var(--coach-border); }
+.brief-progress-track span { display: block; width: 0; height: 100%; border-radius: inherit; background: var(--coach-accent); }
+.brief-progress.working .brief-progress-track span { width: 35% !important; animation: demo-working 1.25s cubic-bezier(.55, 0, .45, 1) infinite; }
+.brief-waiting { margin: 0; padding: 0 24px 18px; color: var(--coach-muted); font-size: 12px; }
+.brief-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 24px; border-top: 1px solid var(--coach-border); }
 .spotlight { position: fixed; z-index: 2147482999; pointer-events: none; border: 3px solid var(--coach-accent);
   border-radius: 5px; box-shadow: 0 0 0 9999px rgba(8, 18, 28, .25); transition: all .2s ease; }
 .coach-pointer { position: fixed; z-index: 2147483003; pointer-events: none; opacity: 0;
@@ -131,7 +139,7 @@ code { font-family: var(--coach-mono); background: var(--coach-page); padding: 1
 .demo-patch a { color: var(--coach-accent-text); }
 @media (max-width: 640px) { .panel { top: auto; bottom: 8px; right: 8px; max-height: 55vh; }
   :host([data-native-overlay]) .panel { left: 8px; }
-  .brief-header, .brief-body, .brief-footer { padding-left: 16px; padding-right: 16px; }
+  .brief-header, .brief-body, .brief-footer, .brief-progress, .brief-waiting { padding-left: 16px; padding-right: 16px; }
   .brief-body h2 { font-size: 22px; }
 }
-@media (prefers-reduced-motion: reduce) { .spotlight, .coach-pointer { transition: none; } .coach-pointer[data-click] svg { animation: none; } .demo-timer.working .demo-timer-track span { animation: none; width: 100% !important; opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .spotlight, .coach-pointer { transition: none; } .coach-pointer[data-click] svg { animation: none; } .demo-timer.working .demo-timer-track span, .brief-progress.working .brief-progress-track span { animation: none; width: 100% !important; opacity: .55; } }

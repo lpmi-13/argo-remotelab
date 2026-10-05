@@ -4,6 +4,8 @@ import {readFile} from 'node:fs/promises';
 import {chromium} from 'playwright';
 
 const coach = await readFile(new URL('../argocd-coach/src/coach.js', import.meta.url), 'utf8');
+const bootstrap = await readFile(new URL('../argocd-coach/src/argocd-bootstrap.js', import.meta.url), 'utf8');
+const launcher = await readFile(new URL('../lab-launcher/index.html', import.meta.url), 'utf8');
 const styles = new Map(await Promise.all(['tokens.css', 'coach.css'].map(async name =>
   [name, await readFile(new URL(`../argocd-coach/src/ui/${name}`, import.meta.url), 'utf8')])));
 
@@ -98,6 +100,104 @@ test('intro stands alone; demo countdown and cursor wait for nested History scro
     assert.ok(geometry.targetTop >= 0 && geometry.targetBottom <= 750, JSON.stringify(geometry));
     assert.ok(Math.abs(geometry.pointerTop - geometry.targetTop) < 40, JSON.stringify(geometry));
   } finally { await browser.close(); }
+});
+
+test('launcher shows the briefing during preparation, then counts down to the demo', {timeout: 30000}, async () => {
+  const browser = await chromium.launch({headless: true});
+  const page = await browser.newPage();
+  const preparing = {...session('demonstration'), state: 'RESETTING',
+    run_updated_at: '2026-10-05T12:00:00Z'};
+  const ready = {...preparing, state: 'READY', run_updated_at: '2026-10-05T12:00:01Z'};
+  let releaseSession;
+  const heldSession = new Promise(resolve => { releaseSession = resolve; });
+  let runReads = 0;
+  try {
+    await page.addInitScript(() => {
+      window.GuidedStepClock = class {
+        stepId = null;
+        start(id) { this.stepId = id; }
+        stop() { this.stepId = null; }
+        input() {}
+      };
+      window.ArgoActionObserver = class { constructor() {} fromURL() {} };
+      window.ArgoCoachTheme = {followTheme() {}};
+      window.WebSocket = class {
+        static OPEN = 1;
+        readyState = 1;
+        constructor() { window.coachStream = this; queueMicrotask(() => this.onopen?.()); }
+        close() { this.readyState = 3; this.onclose?.(); }
+      };
+    });
+    await page.route('**/*', async route => {
+      const url = new URL(route.request().url());
+      if (url.pathname === '/') return route.fulfill({contentType: 'text/html', body: launcher});
+      if (url.pathname === '/coach/learning/api/catalog') return route.fulfill({json: {scenarios: [
+        {id: 'console-history', title: 'Read the release history', level: 1, brief: 'Find the revision.'},
+      ]}});
+      if (url.pathname === '/coach/learning/api/runs' && route.request().method() === 'POST') {
+        return route.fulfill({json: {run: {id: 'run-1'},
+          session: {...preparing, connection_token: 'test-token'}}});
+      }
+      if (url.pathname === '/coach/learning/api/runs/run-1') {
+        runReads += 1;
+        return route.fulfill({status: 500, json: {error: 'Launcher should not wait for READY'}});
+      }
+      if (url.pathname === '/argocd/applications') return route.fulfill({contentType: 'text/html', body:
+        '<!doctype html><html><head><script src="/coach/assets/argocd-bootstrap.js"></script>' +
+        '<script defer src="/coach/assets/coach.js"></script></head><body><main>Argo CD</main></body></html>'});
+      if (url.pathname === '/coach/assets/argocd-bootstrap.js') return route.fulfill({contentType: 'text/javascript', body: bootstrap});
+      if (url.pathname === '/coach/assets/coach.js') return route.fulfill({contentType: 'text/javascript', body: coach});
+      if (url.pathname.startsWith('/coach/assets/ui/')) return route.fulfill({contentType: 'text/css',
+        body: styles.get(url.pathname.split('/').at(-1)) || ''});
+      if (url.pathname === '/coach/learning/api/auth/argocd') return route.fulfill({json: {authenticated: true}});
+      if (url.pathname === '/coach/learning/api/sessions/session-1') {
+        await heldSession;
+        return route.fulfill({json: preparing});
+      }
+      return route.fulfill({status: 404, body: ''});
+    });
+
+    await page.goto('http://lab.test/');
+    await page.locator('#scenario option[value="console-history"]').waitFor({state: 'attached'});
+    await page.locator('#start').click();
+    await page.locator('#argocd-coach-host .incident-briefing').waitFor();
+    assert.equal(new URL(page.url()).pathname, '/argocd/applications');
+    assert.equal(runReads, 0, 'launcher must not wait for run readiness');
+    assert.equal(await page.locator('#argocd-coach-host .panel').count(), 0);
+    assert.equal(await page.locator('#argocd-coach-host [data-action="begin"]').isDisabled(), true);
+    assert.match(await page.locator('#argocd-coach-host [data-brief-label]').innerText(), /Preparing the lab/);
+    await page.setViewportSize({width: 1200, height: 420});
+    const brief = page.locator('#argocd-coach-host .incident-briefing');
+    await brief.evaluate(element => { element.scrollTop = 80; });
+    const scrollBefore = await brief.evaluate(element => element.scrollTop);
+    assert.ok(scrollBefore > 0, 'briefing should scroll on a short viewport');
+    await page.waitForFunction(() => Boolean(window.coachStream));
+    await page.clock.install();
+    await page.evaluate(next => window.coachStream.onmessage({data: JSON.stringify(next)}), ready);
+    assert.equal(await page.locator('#argocd-coach-host [data-action="begin"]').isEnabled(), true);
+    assert.equal(await brief.evaluate(element => element.scrollTop), scrollBefore,
+      'a readiness update should not move the briefing back to the top');
+    await page.clock.runFor(5000);
+    const progress = Number(await page.locator('#argocd-coach-host [role="progressbar"]').getAttribute('aria-valuenow'));
+    assert.ok(progress >= 25 && progress <= 45, `briefing progress was ${progress}%`);
+    await page.evaluate(next => window.coachStream.onmessage({data: JSON.stringify(next)}),
+      {...ready, state: 'UNKNOWN', run_updated_at: null});
+    await page.clock.runFor(2000);
+    await page.evaluate(next => window.coachStream.onmessage({data: JSON.stringify(next)}), ready);
+    const resumed = Number(await page.locator('#argocd-coach-host [role="progressbar"]').getAttribute('aria-valuenow'));
+    assert.ok(Math.abs(resumed - progress) <= 1, 'a temporary status outage should pause the countdown');
+    releaseSession();
+    await page.clock.runFor(100);
+    assert.equal(await page.locator('#argocd-coach-host .incident-briefing').count(), 1,
+      'an older preparation response must not hide the briefing');
+    await page.clock.runFor(10100);
+    await page.locator('#argocd-coach-host .panel').waitFor();
+    assert.equal(await page.locator('#argocd-coach-host .incident-briefing').count(), 0);
+    assert.equal(await page.evaluate(() => sessionStorage.getItem('argo-coach:started:session-1')), 'true');
+  } finally {
+    releaseSession();
+    await browser.close();
+  }
 });
 
 test('terminal minimizes without remounting, resizes, and debrief is centered', {timeout: 15000}, async () => {

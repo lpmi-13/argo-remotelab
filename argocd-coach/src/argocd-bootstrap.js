@@ -15,8 +15,11 @@
     history.replaceState(history.state, '', launch.href);
   }
   const activeHandoff = sessionStorage.getItem(key);
+  const bootstrapState = {handoffKey: key, authPending: false};
+  window.ArgoCoachBootstrap = bootstrapState;
 
   if (activeHandoff && location.pathname.startsWith('/argocd/') && !sessionStorage.getItem('argo-coach:argocd-authenticated')) {
+    bootstrapState.authPending = true;
     document.documentElement.style.visibility = 'hidden';
     fetch('/coach/learning/api/auth/argocd', {credentials: 'same-origin'})
       .then(response => response.json().then(data => {
@@ -24,9 +27,14 @@
         sessionStorage.setItem('argo-coach:argocd-authenticated', 'true');
         location.replace(sessionStorage.getItem('argo-coach:argocd-landing') || '/argocd/applications');
       }))
-      .catch(() => { document.documentElement.style.visibility = ''; });
+      .catch(() => {
+        document.documentElement.style.visibility = '';
+        bootstrapState.authPending = false;
+        dispatchEvent(new Event('argo-coach:auth-failed'));
+      });
   }
   if (activeHandoff && location.pathname.startsWith('/gitea/') && !sessionStorage.getItem('argo-coach:gitea-authenticated')) {
+    bootstrapState.authPending = true;
     document.documentElement.style.visibility = 'hidden';
     fetch('/coach/learning/api/auth/gitea', {credentials: 'same-origin'})
       .then(response => response.json().then(data => {
@@ -34,7 +42,11 @@
         sessionStorage.setItem('argo-coach:gitea-authenticated', 'true');
         location.reload();
       }))
-      .catch(() => { document.documentElement.style.visibility = ''; });
+      .catch(() => {
+        document.documentElement.style.visibility = '';
+        bootstrapState.authPending = false;
+        dispatchEvent(new Event('argo-coach:auth-failed'));
+      });
   }
 
   function send(kind, details) {
@@ -99,5 +111,4 @@
   addEventListener('popstate', announceURL);
   addEventListener('hashchange', announceURL);
   document.addEventListener('DOMContentLoaded', announceURL, {once: true});
-  window.ArgoCoachBootstrap = {handoffKey: key};
 })();

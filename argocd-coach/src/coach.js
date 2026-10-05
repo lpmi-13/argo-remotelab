@@ -1,16 +1,24 @@
-(function () {
+(function initialize() {
+  // The first authenticated Argo page is replaced after login. Starting its
+  // countdown there would consume the briefing before the visible page loads.
+  if (window.ArgoCoachBootstrap?.authPending) {
+    addEventListener('argo-coach:auth-failed', initialize, {once: true});
+    return;
+  }
   const config = JSON.parse(sessionStorage.getItem('argo-coach:handoff') || 'null');
   if (!config?.session || !config?.token) return;
   const service = '/coach/learning';
   const sessionPath = `/api/sessions/${encodeURIComponent(config.session)}`;
   const startedKey = `argo-coach:started:${config.session}`;
+  const initialViewKey = `argo-coach:initial-view:${config.session}`;
   const seqKey = `argo-coach:sequence:${config.session}`;
   const collapsedKey = `argo-coach:collapsed:${config.session}`;
   const demoPatchKey = `argo-coach:demo-patch:${config.session}`;
   const demoFixKey = `argo-coach:demo-fix-started:${config.session}`;
   const demoNarrationKey = `argo-coach:demo-narration:${config.session}`;
   let sequence = Number(sessionStorage.getItem(seqKey) || 0);
-  let view = null;
+  let view = JSON.parse(sessionStorage.getItem(initialViewKey) || 'null');
+  if (view?.session_id !== config.session) view = null;
   let message = '';
   let error = false;
   let briefOpen = !sessionStorage.getItem(startedKey);
@@ -25,6 +33,11 @@
   let demoTimer = null;
   let demoCountdown = null;
   let demoCountdownTicker = null;
+  const briefDuration = 15000;
+  let briefRemaining = briefDuration;
+  let briefDeadline = null;
+  let briefTimer = null;
+  let briefTicker = null;
   let pointerTimer = null;
   let demoPatch = JSON.parse(sessionStorage.getItem(demoPatchKey) || 'null');
   let demoNarration = JSON.parse(sessionStorage.getItem(demoNarrationKey) || 'null');
@@ -64,6 +77,7 @@
     ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const statusClass = value => String(value || 'unknown').toLowerCase();
+  const ready = () => ['READY', 'INVESTIGATING', 'FIXED'].includes(view?.state);
   const stepClock = new window.GuidedStepClock({
     isPaused: () => document.hidden || briefOpen || noteOpen || collapsed ||
       !view || !['READY', 'INVESTIGATING', 'FIXED'].includes(view.state),
@@ -119,11 +133,11 @@
         recentLearning = {answer: details.answer, explanation: result.evaluation.message};
         message = '';
       }
-      view = result.session || view;
+      if (result.session) applyView(result.session, true);
+      else render();
       if (view?.scenario.level === 1 && view.feedback?.fixed) {
         localStorage.setItem('argo-coach:orientation-complete', 'true');
       }
-      render();
     }).catch(reason => say(reason.message, true));
     return sending;
   }
@@ -159,12 +173,76 @@
     attributes: true, attributeFilter: ['class', 'style', 'aria-hidden']});
   updateNativeOverlay();
 
-  function applyView(nextView) {
-    if (!view) { message = ''; error = false; }
+  function applyView(nextView, preserveMessage = false) {
+    // HTTP and WebSocket responses can finish out of order during preparation.
+    if (view?.run_updated_at && nextView.run_updated_at &&
+        Date.parse(nextView.run_updated_at) < Date.parse(view.run_updated_at)) return;
+    if (!view && !preserveMessage) { message = ''; error = false; }
     view = nextView;
-    if (view.feedback) clearDemoCountdown();
+    if (view.feedback || ['FAILED', 'ABORTED'].includes(view.state)) {
+      clearDemoCountdown();
+      clearBriefCountdown();
+    }
     render();
     scheduleDemo();
+  }
+
+  function clearBriefCountdown() {
+    clearTimeout(briefTimer);
+    clearInterval(briefTicker);
+    briefTimer = null;
+    briefTicker = null;
+    briefDeadline = null;
+    briefRemaining = briefDuration;
+  }
+
+  function pauseBriefCountdown() {
+    if (briefDeadline !== null) briefRemaining = Math.max(0, briefDeadline - performance.now());
+    clearTimeout(briefTimer);
+    clearInterval(briefTicker);
+    briefTimer = null;
+    briefTicker = null;
+    briefDeadline = null;
+  }
+
+  function updateBriefCountdown() {
+    const progress = root.querySelector('[data-brief-progress]');
+    if (!progress) return;
+    const waiting = !ready();
+    const remaining = briefDeadline === null ? briefRemaining : Math.max(0, briefDeadline - performance.now());
+    progress.classList.toggle('working', waiting);
+    progress.querySelector('[data-brief-label]').textContent = waiting
+      ? 'Preparing the lab. The countdown starts when it is ready.'
+      : 'Demonstration starts automatically in';
+    progress.querySelector('[data-brief-seconds]').hidden = waiting;
+    progress.querySelector('[data-brief-seconds]').textContent = `${Math.ceil(remaining / 1000)}s`;
+    progress.querySelector('[data-brief-fill]').style.width = `${100 * (1 - remaining / briefDuration)}%`;
+    const bar = progress.querySelector('[role="progressbar"]');
+    if (waiting) {
+      bar.removeAttribute('aria-valuenow');
+      bar.setAttribute('aria-valuetext', 'Preparing the lab');
+    } else {
+      bar.setAttribute('aria-valuenow', String(Math.round(100 * (1 - remaining / briefDuration))));
+      bar.setAttribute('aria-valuetext', `${Math.ceil(remaining / 1000)} seconds until demonstration starts`);
+    }
+  }
+
+  function startBriefCountdown() {
+    if (!briefOpen || view?.mode !== 'demonstration' || !ready() || view.feedback ||
+        demoStopped || document.hidden || briefDeadline !== null || sessionStorage.getItem(startedKey)) return;
+    briefDeadline = performance.now() + briefRemaining;
+    briefTimer = setTimeout(beginInvestigation, briefRemaining);
+    briefTicker = setInterval(updateBriefCountdown, 100);
+    updateBriefCountdown();
+  }
+
+  function beginInvestigation() {
+    if (!ready()) return;
+    clearBriefCountdown();
+    briefOpen = false;
+    sessionStorage.setItem(startedKey, 'true');
+    render();
+    scheduleDemo(500);
   }
 
   function clearDemoCountdown() {
@@ -394,7 +472,8 @@
     const incident = view.briefing || {source: 'Investigation brief', headline: view.scenario.title,
       summary: view.brief, impact: '', objective: view.brief};
     const started = sessionStorage.getItem(startedKey) === 'true';
-    return `<div class="modal-wrap"><div class="modal incident-briefing" role="dialog" aria-modal="true" aria-labelledby="brief-title">
+    const autoStart = view.mode === 'demonstration' && !started;
+    return `<div class="modal-wrap"><div class="modal incident-briefing" role="dialog" aria-modal="true" aria-labelledby="brief-title" tabindex="-1">
       <div class="brief-header"><span class="brief-source">${escape(incident.source)}</span><span class="brief-mode">${escape(view.mode)}</span></div>
       <div class="brief-body"><p class="step-eyebrow">${view.scenario.level === 1 ? 'Practice request' : 'Incoming incident'}</p>
       <h2 id="brief-title">${escape(incident.headline)}</h2>
@@ -402,7 +481,12 @@
       <section class="brief-section"><h3>What we know</h3><p>${escape(incident.summary)}</p></section>
       <section class="brief-section"><h3>Why it matters</h3><p>${escape(incident.impact)}</p></section>
       <section class="brief-section brief-objective"><h3>What we need to establish in Argo CD</h3><p>${escape(incident.objective)}</p></section></div>
-      <div class="brief-footer"><button class="primary" data-action="begin">${started ? 'Return to investigation' : view.mode === 'demonstration' ? 'Begin demonstration' : 'Begin investigation'}</button></div>
+      ${autoStart ? `<div class="brief-progress" data-brief-progress>
+        <div class="brief-progress-copy"><span data-brief-label></span><strong data-brief-seconds></strong></div>
+        <div class="brief-progress-track" role="progressbar" aria-label="Automatic demonstration start" aria-valuemin="0" aria-valuemax="100"><span data-brief-fill></span></div>
+      </div>` : !ready() ? '<p class="brief-waiting">Preparing the lab. The investigation can begin when it is ready.</p>' : ''}
+      <div class="brief-footer">${autoStart ? '<button class="secondary" data-action="stop">Stop</button>' : ''}
+        <button class="primary" data-action="begin" ${ready() ? '' : 'disabled'}>${started ? 'Return to investigation' : autoStart ? 'Start now' : 'Begin investigation'}</button></div>
     </div></div>`;
   }
 
@@ -437,10 +521,19 @@
       root.innerHTML = `<div class="modal-wrap"><div class="modal debrief-modal" role="dialog" aria-modal="true" aria-labelledby="debrief-title">${debrief()}</div></div>`;
       return;
     }
-    if (briefOpen && preparing) { root.innerHTML = ''; return; }
-    if (briefOpen && ['READY', 'INVESTIGATING', 'FIXED'].includes(view.state)) {
+    if (briefOpen && !['FAILED', 'ABORTED', 'COMPLETED'].includes(view.state)) {
+      const oldBrief = root.querySelector('.incident-briefing');
+      const scrollTop = oldBrief?.scrollTop || 0;
+      const focusedInside = oldBrief?.contains(shadow.activeElement);
+      const focusedAction = focusedInside ? shadow.activeElement?.dataset.action : null;
       root.innerHTML = briefing();
-      root.querySelector('[data-action="begin"]')?.focus();
+      const newBrief = root.querySelector('.incident-briefing');
+      newBrief.scrollTop = scrollTop;
+      if (focusedAction) root.querySelector(`[data-action="${focusedAction}"]:not(:disabled)`)?.focus({preventScroll: true});
+      else if (!oldBrief || focusedInside) newBrief.focus({preventScroll: true});
+      if (!ready()) pauseBriefCountdown();
+      startBriefCountdown();
+      updateBriefCountdown();
       return;
     }
     const body = preparing ? `<p>Preparing the environment and waiting for Argo CD to show the incident…</p>`
@@ -884,7 +977,7 @@
     const action = event.target.closest('[data-action]')?.dataset.action;
     if (!action) return;
     if (action === 'retry-session') refresh();
-    else if (action === 'begin') { briefOpen = false; sessionStorage.setItem(startedKey, 'true'); render(); scheduleDemo(500); }
+    else if (action === 'begin') beginInvestigation();
     else if (action === 'continue-step') { recentLearning = null; render(); scheduleDemo(500); }
     else if (action.startsWith('checkin-')) {
       const choice = action.slice('checkin-'.length);
@@ -903,6 +996,8 @@
     }
     else if (action === 'stop') {
       demoStopped = true;
+      briefOpen = false;
+      clearBriefCountdown();
       clearTimeout(demoTimer);
       demoTimer = null;
       clearDemoCountdown();
@@ -994,6 +1089,11 @@
   });
   addEventListener('pointerdown', () => stepClock.input(), {passive: true});
   addEventListener('keydown', () => stepClock.input(), {passive: true});
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) pauseBriefCountdown();
+    else startBriefCountdown();
+    updateBriefCountdown();
+  });
 
   render();
   refresh();

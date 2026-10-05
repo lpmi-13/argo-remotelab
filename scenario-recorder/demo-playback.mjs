@@ -45,6 +45,10 @@ async function launch(page, scenario = 'console-orientation') {
     return location.pathname.startsWith('/argocd/') && handoff?.run &&
       document.querySelector('#argocd-coach-host')?.shadowRoot?.querySelector('[data-action="begin"]');
   }, null, {timeout: 8 * 60_000});
+  await page.waitForFunction(() => {
+    const button = document.querySelector('#argocd-coach-host')?.shadowRoot?.querySelector('[data-action="begin"]');
+    return button && !button.disabled;
+  }, null, {timeout: 8 * 60_000});
   return page.evaluate(() => JSON.parse(sessionStorage.getItem('argo-coach:handoff')).run);
 }
 

@@ -264,6 +264,7 @@ def build_session_view(session, run, probe, include_token):
         "session_id": session["id"], "run_id": session["run_id"], "mode": session["mode"],
         "seed": run.get("seed"),
         "state": run.get("state", "UNKNOWN"), "run_error": run.get("error"),
+        "run_updated_at": run.get("updated_at"),
         "application": session["application"], "environment": session["environment"],
         "scenario": {"id": pack["id"], "title": pack["title"], "level": pack["level"]},
         "brief": pack["brief"],

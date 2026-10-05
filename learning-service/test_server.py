@@ -51,7 +51,9 @@ class LearningServiceTests(unittest.TestCase):
         run = session(name="env-drift", mode="guided")
         run["environment"] = "staging"
         run["application"] = "shop-web-staging"
-        view = server.build_session_view(run, {"state": "READY"}, probe(False, False), False)
+        view = server.build_session_view(run, {"state": "READY", "updated_at": "2026-10-05T12:00:00Z"},
+                                         probe(False, False), False)
+        self.assertEqual(view["run_updated_at"], "2026-10-05T12:00:00Z")
         self.assertIn("staging", view["briefing"]["summary"])
         self.assertIn("staging", view["next_check"]["action"])
         self.assertIn("healthy peer", view["next_check"]["reason"])
