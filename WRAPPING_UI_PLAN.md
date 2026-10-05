@@ -1,5 +1,9 @@
 # Wrapping the Argo CD UI — Three-Mode Learning Plan
 
+Implementation and Phase 0 verification findings are tracked in [WRAPPING_UI_PHASE0.md](docs/WRAPPING_UI_PHASE0.md).
+
+**MVP decision (2026-10-03):** Guided learning requires evidence gathered in the Argo CD UI and a durable repair. The lab terminal is the supported Git repair surface. Gitea remains the in-cluster Git host and webhook source, but its browser editor is optional. Demonstration can make a server-side reference commit while showing the exact diff in the coach. Gitea editor automation is deferred until it helps the learning goal.
+
 ## Purpose
 
 **Help someone who has never used the Argo CD console learn to navigate it well enough to find the information they need to fix real deployment problems, in an environment that looks and behaves like production or staging.**
@@ -62,7 +66,7 @@ ELK-guide teaches **reading telemetry to reach a conclusion**. Its outcome is a 
 
 ## 3. What makes Argo different
 
-1. **The fix happens across three surfaces.** The **Argo UI** is used to diagnose, and to sync, terminate, prune and delete. **Git** changes come through the Gitea web editor or a terminal push. The **terminal** is used for `kubectl`, `sops` and `git`. Six of the eight current scenarios are fixed in git, and four of those need `sops`.
+1. **The fix can span several surfaces.** The **Argo UI** is used to diagnose, and to sync, terminate, prune and delete. The **terminal** handles `git`, `sops` and `kubectl`; a terminal push is the supported Git repair route for MVP. The Gitea editor is optional. Six of the eight original failure scenarios are fixed in git, and four of those need `sops`.
 2. **Failures are persistent state.** A run is "ready" once Argo has detected the failure and it shows in the console.
 3. **One shared cluster, so one active run at a time.** Every run begins with a reset to a clean baseline.
 4. **Argo's UI is a thin REST/SSE client.** UI actions map to `/api/v1/...` calls, and much of the view state is in the URL. This makes observation reliable (§7).
@@ -92,12 +96,12 @@ The progression follows what a complete newcomer needs, in order:
 | Level | Title | What the learner practices | Fix surface |
 |---|---|---|---|
 | **0** | **Console orientation** (no failure) | Log in; filter the Applications list; open an app; read the app header (repo, path, target revision, sync/health); switch between the tree, network, list and pods views; open a resource and its Summary, Events, Logs and Live/Desired manifest tabs; read History; see Diff | None (evidence checks only) |
-| **1** | **Read the tree, fix in git** | Degraded or Progressing apps; find the failing resource; read Events and container state; fix a YAML value | Gitea UI or terminal |
+| **1** | **Read the tree, fix in git** | Degraded or Progressing apps; find the failing resource; read Events and container state; fix a YAML value | Terminal Git push (Gitea editor optional) |
 | **2** | **Operations in the console** | Stuck and failed sync operations, hooks, orphaned resources; Terminate, Sync options (prune, dry-run), Delete with care; History and Rollback as a *temporary* measure | Argo UI + git |
 | **3** | **When rendering fails** | ComparisonError / Unknown; app conditions; reading repo-server errors; SOPS failures | Terminal |
 | **4** | **Multi-environment incidents** | Staging is fine but prod is broken, or the other way round; compare revisions and values between environments; repo credentials (the ssh→https scenario from `notes.txt`) | Mixed |
 
-Level 0 runs as a set of short Guided and Demonstration "missions" (for example, *"Find which Git revision `shop-web-prod` is running"*), and each one ends with an evidence check. It's the entry point for new users, and the launcher recommends it until it has been completed once. Levels 1–4 are the failure scenarios. §14 maps the current eight scenarios onto them.
+Level 1 runs as a set of short Guided and Demonstration "missions" (for example, *"Find which Git revision `shop-web-prod` is running"*), and each one ends with an evidence check. It's the entry point for new users, and the launcher recommends it until it has been completed once. Levels 2–5 are the failure scenarios. §14 maps the current eight scenarios onto them.
 
 ---
 
@@ -238,7 +242,7 @@ Launcher ─► Preparing… ─► Incident briefing
 
 ### 9.1 Demonstration
 
-The coach finds the right app, reads each piece of evidence aloud while highlighting it, answers its own evidence checks, and carries out the fix: Argo actions for real, YAML fixes in the Gitea editor, SOPS fixes typed visibly into the terminal dock. It then verifies in the console. Before destructive actions (Delete, Terminate, force-push) there is a short "about to…" beat, and **Stop** always wins. The run ends with a summary card that shows *where in the console each fact came from*.
+The coach finds the right app, reads each piece of evidence aloud while highlighting it, answers its own evidence checks, and carries out the fix: Argo actions for real and a reference Git commit with its exact diff shown in the coach. SOPS and learner Git fixes use the terminal. It then verifies in the console. Before destructive actions (Delete, Terminate, force-push) there is a short "about to…" beat, and **Stop** always wins. The run ends with a summary card that shows *where in the console each fact came from*.
 
 ### 9.2 Guided
 
@@ -335,7 +339,7 @@ The step clock (≥45 s; 90 s default for git and terminal steps), check-ins, dr
 
 **Platform notes.** Locally, Traefik routes everything to the gateway. On iximiuz, the `argocd` tab on port 30080 points at the gateway, and the iximiuz terminal stays available (state-based validation still credits fixes made there). **Auth handoff**: the gateway sets `argocd.token` and a Gitea session from lab-only credentials. The admin/remotelab login keeps working for Free play (D4).
 
-**Run lifecycle**: `CREATED → RESETTING → INJECTING → AWAITING_DETECTION → READY → INVESTIGATING → FIXED → COMPLETED` (plus `FAILED`/`ABORTED`), with one active run per cluster. Readiness uses pack-specific `Detected()` predicates, so the briefing never describes a symptom the console isn't showing yet. Level 0 missions skip INJECTING.
+**Run lifecycle**: `CREATED → RESETTING → INJECTING → AWAITING_DETECTION → READY → INVESTIGATING → FIXED → COMPLETED` (plus `FAILED`/`ABORTED`), with one active run per cluster. Readiness uses pack-specific `Detected()` predicates, so the briefing never describes a symptom the console isn't showing yet. Level 1 missions skip INJECTING.
 
 **Go scenario interface**: `Parameters()`, `Inject(ctx, git, params)`, `Detected()`, `Fixed()`, `Durable()`, `Cleanup()`. `Description`, `Explanation` and `DiagnoseCommands` move into the scenario packs, and `Revert` is replaced by baseline reset. Parameter values are chosen by the learning service's seeded `materialize()` and validated against `ParamSpec`.
 
@@ -409,23 +413,23 @@ Exit: a short findings note updating §7, §8 and §12.
 
 Exit: seeded runs reach READY in either environment; reset recovers from any learner action; Go predicate tests pass across seeds.
 
-### Phase 2: Coach shell, Argo styling, Demonstration, Level 0
+### Phase 2: Coach shell, Argo styling, Demonstration, Level 1
 
 - Gateway, bootstrap, handoff, auto-login; learning service; `argocd-adapter.js`, `gitea-adapter.js`.
 - **The full Argo-styled component set (§8)**, generated `tokens.css`, theme following, coach mark.
-- Launcher with the curriculum view; **Level 0 missions** in Demonstration and Guided (they need only navigation and evidence checks, so they're the cheapest end-to-end slice and the first thing a newcomer sees).
+- Launcher with the curriculum view; **Level 1 missions** in Demonstration and Guided (they need only navigation and evidence checks, so they're the cheapest end-to-end slice and the first thing a newcomer sees).
 - Demonstration for the two Phase 1 packs.
 
-Exit: a newcomer can complete Level 0 unaided in Guided; both packs run end to end in Demonstration, including the Gitea fix and Verify in the console; the coach matches Argo in light and dark themes.
+Exit: a newcomer can complete Level 1 unaided in Guided; both packs run end to end in Demonstration, including a visible reference diff and Verify in the console; the coach matches Argo in light and dark themes.
 
 ### Phase 3: Guided failure scenarios
 
 - Network/URL/DOM observers → information-target visits; evidence checks; Gitea webhook; `/probe` polling.
 - Hint ladder, Show me, the "you can see this in Argo too" pointer, the §11.2 dead-end rules, and the guided debrief with the evidence map.
 
-Exit: both packs are completable through at least two remediation routes (Gitea vs terminal) in Guided; every dead-end rule fires in an end-to-end test.
+Exit: both packs are completable with a terminal Git push in Guided, with Argo evidence checks and an end-to-end debrief. A Gitea editor route is optional follow-up work.
 
-### Phase 4: Terminal, Levels 2–3, Challenge
+### Phase 4: Terminal, Levels 3–4, Challenge
 
 - `lab-terminal` and the terminal dock (styled like Argo's logs viewer).
 - Packs: stale-job, orphaned-resource, the four SOPS scenarios.
@@ -433,7 +437,7 @@ Exit: both packs are completable through at least two remediation routes (Gitea 
 
 Exit: all eight scenarios × three modes pass the live matrix; an unfixed run can't score above 50; a live-only fix is flagged as not durable.
 
-### Phase 5: Level 4, resilience, polish
+### Phase 5: Level 5, resilience, polish
 
 - env-drift and repo-auth packs.
 - Playwright recorder: reference videos, selector checks, and **visual-regression snapshots** of the coach over Argo pages in both themes, all run on Argo version bumps.
@@ -448,7 +452,7 @@ Exit: all eight scenarios × three modes pass the live matrix; an unfixed run ca
 - **Evaluator fixtures**: the reference route; a kubectl-only diagnosis (full diagnosis credit, half console-evidence credit); fixed but no note; note but not fixed (≤50); plaintext leak; wrong environment.
 - **Coach (node)**: ELK's clock and demo tests, plus network-observer tests against recorded Argo XHR fixtures and URL-parser tests.
 - **Styling**: token extraction runs against the pinned Argo image and fails if tokens are missing; contrast checks on both themes; visual-regression snapshots (Phase 5).
-- **Live**: the scenario × mode matrix; the Level 0 missions; a 20-reset soak with no drift from baseline.
+- **Live**: the scenario × mode matrix; the Level 1 missions; a 20-reset soak with no drift from baseline.
 
 ---
 
@@ -474,7 +478,7 @@ Exit: all eight scenarios × three modes pass the live matrix; an unfixed run ca
 | D2 | Coach injection | nginx gateway `sub_filter`; evaluate Argo UI extensions in Phase 0 |
 | D3 | Observation channel | Network + URL first, DOM as a small fallback |
 | D4 | Learner identity | Gateway auto-login; define a scoped `learner` role that allows terminate, sync and delete in the lab apps |
-| D5 | Fix surfaces | Argo UI, Gitea editor, and terminal, all accepted; SOPS requires the terminal |
+| D5 | Fix surfaces | Argo UI and terminal are supported for MVP; Gitea editor is optional; SOPS requires the terminal |
 | D6 | What ends a run | **Remediation** (`fixed`) plus an incident note, not a diagnosis alone |
 | D7 | Proof of console learning | Information targets + evidence checks, never click sequences |
 | D8 | Coach styling | Match Argo via extracted tokens, Shadow DOM, theme following; with a coach mark so it stays distinguishable |
@@ -489,7 +493,7 @@ Exit: all eight scenarios × three modes pass the live matrix; an unfixed run ca
 
 1. **App naming**: rename `django-app` to `shop-web-{staging,prod}` (more realistic, but touches every script and doc), or keep `django-app` for prod and add `django-app-staging`?
 2. **Evidence checks in Challenge**: incident-note fields only (recommended), or also optional inline checks for learners who want confirmation?
-3. **Demonstration git fixes**: through the Gitea UI (more realistic, more selectors) or through a server-side commit with a visible diff card (more robust)? Recommendation: Gitea UI, reconsidered after Phase 2.
+3. **Demonstration git fixes**: MVP uses a server-side reference commit with an exact diff card. Revisit visible editor automation if learners need to see the editing process.
 4. **Rollback scenarios**: add one where rollback is the *right* first move (auto-sync disabled for prod, which matches many real production setups), to teach when rollback is appropriate?
 5. **Shared package with ELK-guide**: given the divergence in §2, probably only the UI primitives (cursor, spotlight, step clock) are worth sharing. Revisit after Phase 4.
 

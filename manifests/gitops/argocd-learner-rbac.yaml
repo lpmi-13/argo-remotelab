@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-rbac-cm
+  namespace: argocd
+data:
+  policy.default: role:readonly
+  policy.csv: |
+    p, role:lab-learner, applications, get, */*, allow
+    p, role:lab-learner, applications, *, shop/*, allow
+    p, role:lab-learner, logs, get, shop/*, allow
+    p, role:lab-learner, projects, get, *, allow
+    p, role:lab-learner, repositories, get, *, allow
+    g, learner, role:lab-learner

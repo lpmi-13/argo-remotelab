@@ -73,6 +73,9 @@ func (s *WrongTypeSops) Inject(gitClient *git.Client) error {
 			}
 
 			variant := randomWrongTypeSopsVariant()
+			if gitClient.Seed() != 0 {
+				variant = wrongTypeSopsVariants[int(uint64(gitClient.Seed())%uint64(len(wrongTypeSopsVariants)))]
+			}
 			log.Printf("injecting wrong-type-sops variant: %s", variant.name)
 			plaintext := variant.plaintext
 

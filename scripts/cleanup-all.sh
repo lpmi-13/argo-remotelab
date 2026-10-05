@@ -12,6 +12,7 @@ show_help() {
     echo "Options:"
     echo "  --yes, -y         Skip confirmation prompt"
     echo "  --help, -h        Show this help message"
+    echo "  COLIMA_PROFILE    Colima profile to clean on macOS (default: argo-remotelab)"
     echo ""
     exit 0
 }
@@ -80,7 +81,7 @@ force_delete_namespace() {
 if [ "$SKIP_CONFIRMATION" = false ]; then
     echo "=== GitOps Failure Lab - Cleanup ==="
     echo ""
-    echo "This will delete all namespaces (applications, argocd) and their data."
+    echo "This will delete all lab namespaces (applications, shop-staging, argocd) and their data."
     read -p "Proceed? (yes/no): " -r
     echo ""
     if [[ ! $REPLY =~ ^[Yy][Ee][Ss]$ ]]; then
@@ -94,11 +95,14 @@ echo ""
 
 # Switch context
 switch_to_local_context || {
-    echo "WARNING: Could not switch to local context. Using: $(kubectl config current-context 2>/dev/null || echo 'none')"
+    echo "ERROR: cleanup requires a recognized local Kubernetes context" >&2
+    exit 1
 }
+trap 'rm -f "${LAB_KUBECONFIG:-}"' EXIT
 
 echo "Step 1: Deleting namespaces..."
 force_delete_namespace "applications" || true
+force_delete_namespace "shop-staging" || true
 force_delete_namespace "argocd" || true
 echo ""
 
@@ -114,6 +118,7 @@ echo ""
 echo "Step 3: Cleaning up cluster-scoped resources..."
 # Remove ClusterRole and ClusterRoleBinding for scenario controller
 kubectl delete clusterrole scenario-controller --ignore-not-found=true 2>/dev/null || true
+kubectl delete clusterrole lab-terminal-workload --ignore-not-found=true 2>/dev/null || true
 kubectl delete clusterrolebinding scenario-controller --ignore-not-found=true 2>/dev/null || true
 # Remove ArgoCD cluster-scoped resources
 kubectl delete clusterrole argocd-application-controller argocd-applicationset-controller argocd-server --ignore-not-found=true 2>/dev/null || true
@@ -122,14 +127,24 @@ echo "  OK"
 echo ""
 
 echo "Step 4: Cleaning orphaned PVs..."
-kubectl delete pv --all --ignore-not-found=true 2>/dev/null || true
+while read -r pv; do
+    [ -n "$pv" ] && kubectl delete pv "$pv" --ignore-not-found=true 2>/dev/null || true
+done < <(kubectl get pv -o json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    volumes = json.load(sys.stdin).get("items", [])
+except (ValueError, OSError):
+    volumes = []
+for volume in volumes:
+    claim = volume.get("spec", {}).get("claimRef", {})
+    if claim.get("namespace") in {"applications", "shop-staging"}:
+        print(volume["metadata"]["name"])
+')
 echo "  OK"
 echo ""
 
-echo "Step 5: Killing stale port-forwards..."
-pkill -f "port-forward.*argocd" 2>/dev/null || true
-pkill -f "port-forward.*gitea" 2>/dev/null || true
-pkill -f "port-forward.*8444" 2>/dev/null || true
+echo "Step 5: Stopping the lab's host port-forwards..."
+bash "$SCRIPT_DIR/host-port-forwards.sh" stop
 echo "  OK"
 echo ""
 

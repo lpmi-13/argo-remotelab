@@ -8,6 +8,8 @@ metadata:
   name: argocd-cm
   namespace: argocd
 data:
+  accounts.learner: login
+  accounts.learner.enabled: "true"
   # Enable helm-secrets plugin for decrypting SOPS files
   helm.valuesFileSchemes: >-
     secrets+gpg-import, secrets+gpg-import-kubernetes,

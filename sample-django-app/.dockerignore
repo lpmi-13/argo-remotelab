@@ -1,4 +1,5 @@
 chart/
 *.tgz
+.venv/
 __pycache__/
 *.pyc

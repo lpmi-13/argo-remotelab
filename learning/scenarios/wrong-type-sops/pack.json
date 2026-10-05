@@ -1,0 +1,12 @@
+{
+  "id": "wrong-type-sops", "title": "Wrong secrets shape", "level": 4,
+  "brief": "The latest encrypted secrets update blocked deployment. Read the render or sync failure.",
+  "fix_surface": "terminal", "fix_paths": ["chart/django-app/secrets.yaml.enc"],
+  "targets": ["apps.list", "app.header", "app.conditions", "app.operation", "app.history"],
+  "checks": [
+    {"id": "application", "target": "apps.list", "question": "Which Application is blocked?", "answer": "${application}", "hint": "Filter by the environment in the briefing.", "why": "Start with the affected release."},
+    {"id": "cause", "target": ["app.conditions", "app.operation"], "question": "Which values key has the wrong shape?", "answer": "secrets", "hint": "Read the key named by the render or operation error.", "why": "The error points to the exact input that cannot render or apply."}
+  ],
+  "truth": {"resource": "secrets.yaml.enc", "cause": "The decrypted secrets value is not a valid environment-variable map", "fix": "Re-encrypt a valid secrets map", "evidence": "secrets"},
+  "habits": ["fix-in-git", "no-plaintext-secrets", "right-environment"]
+}

@@ -1,0 +1,12 @@
+{
+  "id": "missing-configmap", "title": "Missing ConfigMap", "level": 2,
+  "brief": "A shop release is not starting. Find the affected Application and the warning on its pod.",
+  "fix_surface": "git", "fix_paths": ["chart/django-app/templates/deployment.yaml"],
+  "targets": ["apps.list", "app.header", "app.tree", "resource.events", "resource.manifest", "app.history"],
+  "checks": [
+    {"id": "application", "target": "apps.list", "question": "Which Application matches this incident?", "answer": "${application}", "hint": "Filter by the environment in the briefing.", "why": "The Applications list distinguishes staging from production."},
+    {"id": "missing-name", "target": "resource.events", "question": "Which ConfigMap name is the pod trying to load?", "answer": "django-app-missing-config", "hint": "Read the pod's most recent warning event.", "why": "Events explain why Kubernetes could not start the pod."}
+  ],
+  "truth": {"resource": "Deployment/django", "cause": "The deployment references a ConfigMap that does not exist", "fix": "Restore the ConfigMap reference in git", "evidence": "django-app-missing-config"},
+  "habits": ["fix-in-git", "right-environment"]
+}

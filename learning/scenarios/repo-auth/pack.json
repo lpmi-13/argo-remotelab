@@ -1,0 +1,13 @@
+{
+  "id": "repo-auth", "title": "Repository authentication", "level": 5,
+  "brief": "The production or staging Application can no longer fetch its source. Read the repository connection error and compare the configured URL with the working repository entry.",
+  "fix_surface": "argo", "fix_paths": [],
+  "targets": ["apps.list", "app.header", "app.conditions", "settings.repos", "app.history"],
+  "checks": [
+    {"id": "application", "target": "apps.list", "question": "Which Application cannot fetch its source?", "answer": "${application}", "hint": "Filter by the environment in the briefing.", "why": "The list identifies the affected release."},
+    {"id": "source", "target": "app.conditions", "question": "Which repository transport is failing?", "answer": "SSH", "hint": "Read the URL and authentication failure in Conditions.", "why": "Conditions show whether a failure is in repository access or rendered resources."},
+    {"id": "working-source", "target": "settings.repos", "question": "Which transport does the working repository entry use?", "answer": "HTTP", "hint": "Open Settings → Repositories and read the connected Gitea URL.", "why": "The connected repository entry provides a known-good source to compare with the failing Application."}
+  ],
+  "truth": {"resource": "Application source", "cause": "The Application uses an SSH repository URL without a deploy key", "fix": "Restore the authenticated repository URL in the Application", "evidence": "SSH"},
+  "habits": ["right-environment"]
+}

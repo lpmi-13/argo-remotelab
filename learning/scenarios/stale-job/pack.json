@@ -1,0 +1,13 @@
+{
+  "id": "stale-job", "title": "Failed migration hook", "level": 3,
+  "brief": "A release is blocked before its Deployment updates. Find the sync hook that failed.",
+  "fix_surface": "argo-and-git", "fix_paths": ["chart/django-app/templates/migrate-job.yaml", "chart/django-app/templates/deployment.yaml"],
+  "targets": ["apps.list", "app.operation", "app.tree", "resource.logs", "app.history"],
+  "checks": [
+    {"id": "application", "target": "apps.list", "question": "Which Application is blocked?", "answer": "${application}", "hint": "Check the environment label and sync status.", "why": "The list tells you which release needs investigation."},
+    {"id": "hook", "target": "app.operation", "question": "Which hook phase failed?", "answer": "PreSync", "hint": "Read the failed Job entry in the operation panel.", "why": "The operation panel shows which phase blocked the sync."},
+    {"id": "log", "target": "resource.logs", "question": "What failure line does the migration Job print?", "answer": "migration dependency check failed", "hint": "Open the failed Job's Logs tab.", "why": "Hook logs give the immediate cause of a failed PreSync step."}
+  ],
+  "truth": {"resource": "migration Job", "cause": "A PreSync migration hook exits with an error", "fix": "Repair the hook in git and resync", "evidence": "migration dependency check failed"},
+  "habits": ["diff-before-sync", "fix-in-git", "right-environment"]
+}

@@ -1,0 +1,12 @@
+{
+  "id": "stuck-sync", "title": "Stuck sync", "level": 2,
+  "brief": "The shop release is still progressing and the workload has not become ready. Find the failed probe.",
+  "fix_surface": "argo-and-git", "fix_paths": ["chart/django-app/values.yaml"],
+  "targets": ["apps.list", "app.header", "app.operation", "app.tree", "resource.events", "resource.manifest", "app.history"],
+  "checks": [
+    {"id": "application", "target": "apps.list", "question": "Which Application matches this incident?", "answer": "${application}", "hint": "Use the environment label.", "why": "Start with the right environment before changing anything."},
+    {"id": "probe-path", "target": "resource.manifest", "question": "What path does the failing readiness probe request?", "answer": "/api/nonexistent/", "hint": "Read the pod's Desired manifest and its probe fields.", "why": "The desired manifest shows the value Argo will keep applying."}
+  ],
+  "truth": {"resource": "Deployment/django", "cause": "The readiness probe points at a nonexistent endpoint", "fix": "Terminate the stuck operation and commit a valid probe path", "evidence": "/api/nonexistent/"},
+  "habits": ["diff-before-sync", "no-sync-while-running", "fix-in-git", "right-environment"]
+}

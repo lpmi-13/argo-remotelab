@@ -1,0 +1,37 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: shop
+  namespace: argocd
+spec:
+  description: Shop workload deployments in staging and production
+  sourceRepos:
+  - http://gitea.applications.svc.cluster.local:3000/remotelab/django-app.git
+  - ssh://git@gitea.applications.svc.cluster.local:22/remotelab/django-app.git
+  destinations:
+  - server: https://kubernetes.default.svc
+    namespace: applications
+  - server: https://kubernetes.default.svc
+    namespace: shop-staging
+  clusterResourceWhitelist:
+  - group: ""
+    kind: Namespace
+  namespaceResourceWhitelist:
+  - group: "*"
+    kind: "*"
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform
+  namespace: argocd
+spec:
+  description: Low-cost platform configuration applications
+  sourceRepos:
+  - http://gitea.applications.svc.cluster.local:3000/remotelab/django-app.git
+  destinations:
+  - server: https://kubernetes.default.svc
+    namespace: applications
+  namespaceResourceWhitelist:
+  - group: ""
+    kind: ConfigMap

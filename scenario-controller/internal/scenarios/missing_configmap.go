@@ -30,20 +30,44 @@ func (s *MissingConfigMap) Inject(gitClient *git.Client) error {
 				return fmt.Errorf("failed to read %s: %w", DeploymentFile, err)
 			}
 
-			content := string(data)
-			modified := strings.Replace(content,
-				"name: {{ include \"django-app.fullname\" . }}-config",
-				"name: django-app-missing-config",
-				1,
-			)
-
-			if modified == content {
-				return fmt.Errorf("failed to change ConfigMap reference in %s", DeploymentFile)
+			modified, err := missingConfigVariant(string(data), gitClient.Seed())
+			if err != nil {
+				return err
 			}
-
 			return w.WriteFile(DeploymentFile, []byte(modified))
 		},
 	)
+}
+
+// Keep the missing name stable for evidence checks and reset RBAC, while the
+// failing Kubernetes reference varies deterministically with the run seed.
+func missingConfigVariant(content string, seed int64) (string, error) {
+	const missingName = "django-app-missing-config"
+	var marker, replacement string
+	switch uint64(seed) % 3 {
+	case 0: // envFrom: container configuration cannot be built.
+		marker = "name: {{ include \"django-app.fullname\" . }}-config"
+		replacement = "name: " + missingName
+	case 1: // A required key in an otherwise valid environment block.
+		marker = "        env:\n"
+		replacement = "        env:\n        - name: LAB_REQUIRED_CONFIG\n          valueFrom:\n            configMapKeyRef:\n              name: " + missingName + "\n              key: APP_ENVIRONMENT\n"
+	case 2: // A volume mount yields a FailedMount event in the Pod.
+		marker = "    spec:\n      initContainers:"
+		replacement = "    spec:\n      volumes:\n      - name: lab-required-config\n        configMap:\n          name: " + missingName + "\n      initContainers:"
+	}
+	modified := strings.Replace(content, marker, replacement, 1)
+	if modified == content {
+		return "", fmt.Errorf("failed to add missing ConfigMap reference to %s", DeploymentFile)
+	}
+	if uint64(seed)%3 == 2 {
+		const containerMarker = "        imagePullPolicy: {{ .Values.image.pullPolicy }}"
+		modified = strings.Replace(modified, containerMarker,
+			containerMarker+"\n        volumeMounts:\n        - name: lab-required-config\n          mountPath: /etc/lab-required-config", 1)
+		if !strings.Contains(modified, "        volumeMounts:\n        - name: lab-required-config") {
+			return "", fmt.Errorf("failed to mount missing ConfigMap in %s", DeploymentFile)
+		}
+	}
+	return modified, nil
 }
 
 func (s *MissingConfigMap) Revert(gitClient *git.Client) error {

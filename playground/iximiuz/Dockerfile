@@ -14,6 +14,7 @@ COPY argocd-apps /opt/argo-remotelab/argocd-apps
 COPY manifests /opt/argo-remotelab/manifests
 COPY playground/iximiuz /opt/argo-remotelab/playground/iximiuz
 COPY sample-django-app/chart /opt/argo-remotelab/sample-django-app/chart
+COPY sample-django-app/platform /opt/argo-remotelab/sample-django-app/platform
 COPY scripts /opt/argo-remotelab/scripts
 COPY playground/iximiuz/image/bootstrap-gitops-lab.sh /opt/iximiuz-labs/bootstrap-gitops-lab.sh
 COPY playground/iximiuz/image/gitops-lab-bootstrap.service /etc/systemd/system/gitops-lab-bootstrap.service

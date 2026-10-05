@@ -41,6 +41,10 @@ healthCheck:
   readinessInitialDelay: 15
   livenessInitialDelay: 30
 
+# A release verification hook is enabled only in the stuck-sync exercise.
+lab:
+  postSyncVerify: false
+
 metrics:
   enabled: true
   port: "8000"

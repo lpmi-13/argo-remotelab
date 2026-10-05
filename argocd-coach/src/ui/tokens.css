@@ -1,0 +1,48 @@
+/* Extracted from Argo CD v3.3.7 compiled CSS in main.js.
+ * Status colors match Argo; separate text colors meet WCAG AA. */
+:host {
+  --coach-font: "Heebo",sans-serif;
+  --coach-mono: "Bitstream Vera Sans Mono","DejaVu Sans Mono",Monaco,Courier,monospace;
+  --coach-accent: #00a2b3;
+  --coach-accent-text: #00828f;
+  --coach-sidebar: #0f2733;
+  --coach-page: #dee6eb;
+  --coach-surface: #ffffff;
+  --coach-border: #dee6eb;
+  --coach-text: #495763;
+  --coach-muted: #687984;
+  --coach-healthy: #18be94;
+  --coach-progressing: #0dadea;
+  --coach-degraded: #e96d76;
+  --coach-suspended: #766f94;
+  --coach-missing: #f4c030;
+  --coach-unknown: #ccd6dd;
+  --coach-healthy-text: #118568;
+  --coach-progressing-text: #0979a4;
+  --coach-degraded-text: #ba575e;
+  --coach-suspended-text: #766f94;
+  --coach-missing-text: #866a1a;
+  --coach-unknown-text: #70767a;
+  --coach-radius: 8px;
+  --coach-button-radius: 24px;
+  --coach-button-padding: 8px 18px;
+  --coach-button-size: 13px;
+  --coach-button-weight: 500;
+  --coach-button-text: #0f2733;
+  --coach-shadow: 3px 3px 20px #8fa4b1;
+}
+:host([data-theme="dark"]) {
+  --coach-accent-text: #1aabbb;
+  --coach-page: #100f0f;
+  --coach-surface: #303237;
+  --coach-border: #495763;
+  --coach-text: #dee6eb;
+  --coach-muted: #eff3f5;
+  --coach-healthy-text: #18be94;
+  --coach-progressing-text: #0dadea;
+  --coach-degraded-text: #eb7c84;
+  --coach-suspended-text: #9f9ab4;
+  --coach-missing-text: #f4c030;
+  --coach-unknown-text: #ccd6dd;
+  --coach-shadow: 3px 3px 20px #100f0f;
+}

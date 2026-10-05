@@ -41,43 +41,16 @@ is_colima() {
 }
 
 detect_local_context() {
-    # Try to detect the local Kubernetes context
-    # Returns the context name if found, empty string otherwise
-
-    local contexts
-    contexts=$(kubectl config get-contexts -o name 2>/dev/null || echo "")
-
-    if [[ -z "$contexts" ]]; then
-        echo ""
-        return 1
-    fi
-
-    # Priority order for context detection:
-    # 1. Exact match for common local cluster names
-    # 2. Pattern match for variations (e.g., colima, colima-default, colima-profile)
-    # NOTE: Removed flawed fallback logic that incorrectly identified remote contexts as local
-
-    local patterns=(
-        "colima"
-        "^docker-desktop$"
-        "^k3d-"
-        "^kind-"
-        "^minikube$"
-    )
-
-    for pattern in "${patterns[@]}"; do
-        local match
-        match=$(echo "$contexts" | grep -E "$pattern" | head -n 1)
-        if [[ -n "$match" ]]; then
-            echo "$match"
-            return 0
+    if [[ "$PLATFORM" == "macos" ]]; then
+        local profile="${COLIMA_PROFILE:-argo-remotelab}"
+        if [[ "$profile" == "default" ]]; then
+            echo "colima"
+        else
+            echo "colima-${profile}"
         fi
-    done
-
-    # No local context found - do NOT fall back to current context
-    # as it may be a remote cluster
-    echo ""
-    return 1
+    else
+        echo "default"
+    fi
 }
 
 check_kubernetes_available() {
@@ -85,81 +58,33 @@ check_kubernetes_available() {
 }
 
 switch_to_local_context() {
-    log "Checking current kubectl context..."
-
-    local current_context
-    current_context=$(kubectl config current-context 2>/dev/null || echo "none")
-    log "Current context: ${current_context}"
-
     local target_context
-    if [[ "$PLATFORM" == "macos" ]]; then
-        # Try to detect local context automatically
-        target_context=$(detect_local_context)
-
-        if [[ -z "$target_context" ]]; then
-            error "No local Kubernetes context found in kubeconfig.
-
-Available contexts:"
-            kubectl config get-contexts 2>/dev/null || echo "  (none)"
-            echo ""
-            error "DANGER: Currently using context '${current_context}' which is NOT a recognized local cluster."
-            error "This script is designed for LOCAL DEVELOPMENT ONLY."
-            error "Deploying to a remote cluster could cause damage or data loss."
-            echo ""
-            echo "Troubleshooting steps:"
-            echo "  1. Ensure Colima is installed and running with Kubernetes:"
-            echo "     brew install colima kubectl docker"
-            echo "     colima start --kubernetes --cpu 6 --memory 8 --disk 100"
-            echo "  2. Verify with: kubectl config get-contexts"
-            echo "  3. Look for a context with 'colima' in the name (e.g., 'colima', 'colima-default')"
-            echo ""
-            echo "If using a different local Kubernetes tool (Docker Desktop, minikube, etc.),"
-            echo "ensure it's running and has created a kubeconfig context."
-            echo ""
-            error "Aborting deployment to prevent accidental remote cluster modification."
-            return 1
-        fi
-
-        log "Detected local context: ${target_context}"
-
-        # Extra safety check: warn if currently on a non-local context
-        if [[ "$current_context" != "$target_context" ]] && [[ "$current_context" != "none" ]]; then
-            warning "Currently on context '${current_context}' which does NOT match the detected local context '${target_context}'"
-            warning "This could be a remote cluster - switching to local context for safety"
-        fi
-    else
-        target_context="default"
-    fi
-
-    # Check if we're already on the right context
-    if [[ "$current_context" == "$target_context" ]]; then
-        log "Already using ${target_context} context"
-        return 0
-    fi
-
-    # Check if target context exists
-    if ! kubectl config get-contexts "$target_context" &>/dev/null; then
-        warning "Context ${target_context} not found in kubeconfig"
-        if [[ "$PLATFORM" == "linux" ]]; then
-            warning "Will configure after k3s installation"
-        fi
+    target_context=$(detect_local_context)
+    if ! kubectl config get-contexts "$target_context" -o name 2>/dev/null | grep -Fxq "$target_context"; then
+        error "Local Kubernetes context ${target_context} is missing"
         return 1
     fi
 
-    # Switch context
-    log "Switching kubectl context to: ${target_context}"
-    if kubectl config use-context "$target_context" &>/dev/null; then
-        success "Successfully switched to ${target_context} context"
-
-        # Verify the switch
-        local new_context
-        new_context=$(kubectl config current-context 2>/dev/null)
-        log "Confirmed current context: ${new_context}"
-        return 0
-    else
-        error "Failed to switch to ${target_context} context"
+    # A minified kubeconfig keeps every command in this script, including Helm,
+    # on the selected lab cluster without changing the user's active context.
+    local lab_kubeconfig
+    lab_kubeconfig=$(mktemp "${TMPDIR:-/tmp}/argo-remotelab-kubeconfig.XXXXXX") || return 1
+    chmod 600 "$lab_kubeconfig"
+    if ! kubectl config view --raw --flatten --minify --context="$target_context" > "$lab_kubeconfig"; then
+        rm -f "$lab_kubeconfig"
+        error "Could not isolate context ${target_context}"
         return 1
     fi
+    LAB_ORIGINAL_KUBECONFIG="${KUBECONFIG:-}"
+    export LAB_ORIGINAL_KUBECONFIG
+    export KUBECONFIG="$lab_kubeconfig"
+    LAB_KUBECONFIG="$lab_kubeconfig"
+    if ! kubectl cluster-info >/dev/null 2>&1; then
+        rm -f "$lab_kubeconfig"
+        error "Local Kubernetes context ${target_context} is unreachable"
+        return 1
+    fi
+    log "Using isolated Kubernetes context ${target_context}"
 }
 
 log() {

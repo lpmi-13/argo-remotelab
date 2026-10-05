@@ -1,0 +1,13 @@
+{
+  "id": "console-orientation", "title": "Find the deployed revision", "level": 1,
+  "brief": "Find the shop application for the named environment. Use the Applications list, open it, and find the deployed revision and its health.",
+  "fix_surface": "none", "fix_paths": [],
+  "targets": ["apps.list", "apps.filter", "app.header", "app.tree", "app.history", "app.diff"],
+  "checks": [
+    {"id": "application", "target": "apps.list", "question": "Which Application matches the briefing?", "answer": "${application}", "hint": "Use the environment label on the Applications list.", "why": "The list shows the environment and health before you open an app."},
+    {"id": "health", "target": "app.header", "question": "What health status does the application header show?", "answer": "Healthy", "hint": "Look beside the sync status in the application header.", "why": "The header is the fastest way to confirm current health."},
+    {"id": "revision", "target": "app.history", "question": "Which Git revision is deployed?", "answer": "${revision}", "hint": "Open History and Rollback and read the latest revision.", "why": "History ties the deployed revision to a sync event."}
+  ],
+  "truth": {"resource": "${application}", "cause": "No incident", "fix": "No fix needed"},
+  "habits": []
+}

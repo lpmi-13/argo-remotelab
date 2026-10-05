@@ -24,9 +24,15 @@ spec:
         imagePullPolicy: IfNotPresent
         env:
         - name: ARGOCD_SERVER
-          value: "argocd-server.argocd.svc.cluster.local:8080"
+          value: "http://argocd-server.argocd.svc.cluster.local:80/argocd"
         - name: ARGOCD_APP_NAME
-          value: "django-app"
+          value: "shop-web-prod"
+        - name: ARGOCD_USERNAME
+          value: "learner"
+        - name: ARGOCD_PASSWORD
+          value: "remotelab"
+        - name: LAB_MODE
+          value: "api"
         - name: GITEA_URL
           value: "http://gitea.applications.svc.cluster.local:3000"
         - name: GITEA_USERNAME
@@ -58,6 +64,9 @@ spec:
           requests:
             cpu: 50m
             memory: 64Mi
+        ports:
+        - name: http
+          containerPort: 8092
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -73,6 +82,27 @@ rules:
 - apiGroups: ["argoproj.io"]
   resources: ["applications"]
   verbs: ["get", "list", "watch", "patch"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  resourceNames: ["django-web"]
+  verbs: ["get", "delete"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["django-app-missing-config"]
+  verbs: ["delete"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scenario-controller
+  namespace: applications
+spec:
+  selector:
+    app: scenario-controller
+  ports:
+  - name: http
+    port: 8092
+    targetPort: http
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

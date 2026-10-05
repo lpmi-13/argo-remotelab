@@ -1,0 +1,17 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lab-gateway
+  namespace: applications
+spec:
+  strategy:
+    type: Recreate
+    rollingUpdate: null
+  template:
+    spec:
+      containers:
+      - name: gateway
+        ports:
+        - containerPort: 8080
+          hostPort: 30080
+          protocol: TCP

@@ -1,0 +1,21 @@
+{
+  "version": "argocd-3.3.7",
+  "targets": {
+    "apps.list": "Applications list and status cards",
+    "apps.filter": "Applications list search and filters",
+    "app.header": "Application details header and summary",
+    "app.tree": "Application resource tree",
+    "app.network": "Application network view",
+    "app.list": "Application resource list",
+    "app.pods": "Application pods view",
+    "app.conditions": "Application conditions panel",
+    "app.operation": "Sync status and last operation",
+    "app.history": "History and Rollback",
+    "app.diff": "Application diff",
+    "resource.summary": "Resource summary panel",
+    "resource.events": "Resource events tab",
+    "resource.logs": "Resource logs tab",
+    "resource.manifest": "Live and desired manifest tabs",
+    "settings.repos": "Settings and repositories"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "id": "sops-global-mac-mismatch", "title": "SOPS global MAC mismatch", "level": 4,
+  "brief": "Argo CD cannot render the latest encrypted configuration. Find the comparison error.",
+  "fix_surface": "terminal", "fix_paths": ["chart/django-app/secrets.yaml.enc"],
+  "targets": ["apps.list", "app.header", "app.conditions", "app.history"],
+  "checks": [
+    {"id": "application", "target": "apps.list", "question": "Which Application has the comparison error?", "answer": "${application}", "hint": "Filter the Applications list by environment.", "why": "The list identifies the broken release."},
+    {"id": "cause", "target": "app.conditions", "question": "Which SOPS integrity field mismatched?", "answer": "sops.mac", "hint": "Read the field named in Conditions.", "why": "Conditions show why Argo could not render desired manifests."}
+  ],
+  "truth": {"resource": "secrets.yaml.enc", "cause": "The SOPS global MAC no longer matches the encrypted values", "fix": "Decrypt with --ignore-mac and re-encrypt", "evidence": "sops.mac"},
+  "habits": ["fix-in-git", "no-plaintext-secrets", "right-environment"]
+}

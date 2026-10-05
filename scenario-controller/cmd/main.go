@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"math/rand"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lpmi-13/argo-remotelab/scenario-controller/internal/api"
 	"github.com/lpmi-13/argo-remotelab/scenario-controller/internal/argocd"
 	"github.com/lpmi-13/argo-remotelab/scenario-controller/internal/git"
 	"github.com/lpmi-13/argo-remotelab/scenario-controller/internal/scenarios"
@@ -23,6 +25,8 @@ func main() {
 	// Load configuration from environment variables.
 	argocdServer := requireEnv("ARGOCD_SERVER")
 	argocdAppName := requireEnv("ARGOCD_APP_NAME")
+	argocdUsername := requireEnv("ARGOCD_USERNAME")
+	argocdPassword := requireEnv("ARGOCD_PASSWORD")
 	giteaURL := requireEnv("GITEA_URL")
 	giteaUsername := requireEnv("GITEA_USERNAME")
 	giteaPassword := requireEnv("GITEA_PASSWORD")
@@ -49,7 +53,7 @@ func main() {
 	}()
 
 	// Initialise clients.
-	argoClient, err := argocd.NewClient(argocdServer, argocdAppName)
+	argoClient, err := argocd.NewClient(argocdServer, argocdAppName, argocdUsername, argocdPassword)
 	if err != nil {
 		log.Fatalf("failed to create argocd client: %v", err)
 	}
@@ -66,6 +70,10 @@ func main() {
 	registry.Register(&scenarios.StuckSync{})
 	registry.Register(&scenarios.StaleJob{})
 	registry.Register(&scenarios.OrphanedResource{})
+	registry.Register(&scenarios.EnvDrift{})
+	if os.Getenv("LAB_MODE") == "api" {
+		registry.Register(&scenarios.RepoAuth{})
+	}
 
 	if first := os.Getenv("FIRST_SCENARIO"); first != "" {
 		pool := splitAndTrim(first, ",")
@@ -74,6 +82,20 @@ func main() {
 	}
 
 	log.Printf("registered %d scenarios: %v", registry.Count(), registry.Names())
+	if os.Getenv("LAB_MODE") == "api" {
+		server := &http.Server{Addr: ":8092", Handler: api.NewServer(argoClient, gitClient, registry), ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
+			defer done()
+			_ = server.Shutdown(shutdownCtx)
+		}()
+		log.Println("run API listening on :8092")
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("run API failed: %v", err)
+		}
+		return
+	}
 
 	// Main control loop.
 	if err := runLoop(ctx, argoClient, gitClient, registry, minDelay, maxDelay); err != nil {

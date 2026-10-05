@@ -41,6 +41,9 @@ fi
 
 images=(
   "${SCENARIO_CONTROLLER_IMAGE_REPO}:${image_tag}"
+  "${LEARNING_SERVICE_IMAGE_REPO}:${image_tag}"
+  "${LAB_GATEWAY_IMAGE_REPO}:${image_tag}"
+  "${LAB_TERMINAL_IMAGE_REPO}:${image_tag}"
   "${ARGOCD_TOOLS_IMAGE_REPO}:${image_tag}"
   "${DJANGO_IMAGE_REPO}:${image_tag}"
   "${rootfs_image}"

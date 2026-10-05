@@ -1,0 +1,15 @@
+{
+  "name": "argo-remotelab-scenario-recorder",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "record": "node recorder.mjs",
+    "guided": "node guided-terminal.mjs",
+    "demo": "node demo-playback.mjs",
+    "test": "node --test coach-ui.test.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.62.1"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "id": "sops-decrypt-failure", "title": "SOPS data key failure", "level": 4,
+  "brief": "Argo CD cannot compare the latest shop revision. Read the Application condition and restore the encrypted source.",
+  "fix_surface": "terminal", "fix_paths": ["chart/django-app/secrets.yaml.enc"],
+  "targets": ["apps.list", "app.header", "app.conditions", "settings.repos", "app.history"],
+  "checks": [
+    {"id": "application", "target": "apps.list", "question": "Which Application has the comparison error?", "answer": "${application}", "hint": "Filter by environment and check sync status.", "why": "The list identifies the affected environment."},
+    {"id": "cause", "target": "app.conditions", "question": "Which SOPS component cannot be decrypted?", "answer": "age data key", "hint": "Read the ComparisonError message in Conditions.", "why": "Conditions expose manifest generation failures when no resource tree can render."}
+  ],
+  "truth": {"resource": "secrets.yaml.enc", "cause": "The age-encrypted SOPS data key was corrupted", "fix": "Re-encrypt the secrets from known plaintext", "evidence": "age data key"},
+  "habits": ["fix-in-git", "no-plaintext-secrets", "right-environment"]
+}

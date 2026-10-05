@@ -7,7 +7,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /scenario-controller ./cmd/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -o /scenario-controller ./cmd
+
+FROM quay.io/argoproj/argocd:v3.3.7 AS argocd-tools
 
 FROM alpine:3.19
 
@@ -16,5 +18,6 @@ RUN apk add --no-cache git age ca-certificates && \
     chmod +x /usr/local/bin/sops
 
 COPY --from=builder /scenario-controller /usr/local/bin/scenario-controller
+COPY --from=argocd-tools /usr/local/bin/helm /usr/local/bin/helm
 
 ENTRYPOINT ["/usr/local/bin/scenario-controller"]

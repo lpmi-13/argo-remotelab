@@ -1,0 +1,12 @@
+{
+  "id": "env-drift", "title": "Compare staging and production", "level": 5,
+  "brief": "One environment's shop release is failing while the other is healthy. Compare both Applications before changing the affected one.",
+  "fix_surface": "git", "fix_paths": ["chart/django-app/values.yaml"],
+  "targets": ["apps.list", "apps.filter", "app.header", "app.history", "app.diff", "resource.manifest"],
+  "checks": [
+    {"id": "application", "target": "apps.list", "question": "Which Application is failing?", "answer": "${application}", "hint": "Compare the two environment labels and health badges.", "why": "The Applications list identifies the affected environment."},
+    {"id": "probe-path", "target": "resource.manifest", "question": "What readiness path is configured only in the failing environment?", "answer": "/api/legacy-health/", "hint": "Compare the Desired manifests of the two Deployments.", "why": "The desired manifest identifies environment-specific drift."}
+  ],
+  "truth": {"resource": "Deployment/django", "cause": "One environment's readiness probe uses a path that does not exist", "fix": "Restore the affected environment's probe path in git", "evidence": "/api/legacy-health/"},
+  "habits": ["right-environment", "fix-in-git"]
+}

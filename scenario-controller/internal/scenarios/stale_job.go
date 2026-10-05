@@ -39,6 +39,10 @@ func (s *StaleJob) Inject(gitClient *git.Client) error {
 			if modified == content {
 				return fmt.Errorf("could not find insertion point in migrate-job.yaml")
 			}
+			modified = strings.Replace(modified, "  backoffLimit: 3", "  backoffLimit: 0", 1)
+			if !strings.Contains(modified, "  backoffLimit: 0") {
+				return fmt.Errorf("could not set hook retry limit in migrate-job.yaml")
+			}
 
 			if err := w.WriteFile(MigrateJobFile, []byte(modified)); err != nil {
 				return err
@@ -77,6 +81,7 @@ func (s *StaleJob) Revert(gitClient *git.Client) error {
 			marker := "          set -e\n          echo \"Running Django migrations...\""
 
 			modified := strings.Replace(content, injection, marker, 1)
+			modified = strings.Replace(modified, "  backoffLimit: 0", "  backoffLimit: 3", 1)
 			if err := w.WriteFile(MigrateJobFile, []byte(modified)); err != nil {
 				return err
 			}

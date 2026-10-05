@@ -32,11 +32,11 @@ type Scenario interface {
 
 // Registry holds all registered scenarios and provides random selection.
 type Registry struct {
-	scenarios       []Scenario
-	queue           []Scenario
-	lastName        string
-	firstPool       []string
-	servedScenario  bool
+	scenarios      []Scenario
+	queue          []Scenario
+	lastName       string
+	firstPool      []string
+	servedScenario bool
 }
 
 // SetFirstScenarios constrains the very first call to Random to pick from the
@@ -120,6 +120,16 @@ func (r *Registry) Names() []string {
 		names[i] = s.Name()
 	}
 	return names
+}
+
+// Find returns a registered scenario by its stable name.
+func (r *Registry) Find(name string) Scenario {
+	for _, scenario := range r.scenarios {
+		if scenario.Name() == name {
+			return scenario
+		}
+	}
+	return nil
 }
 
 func (r *Registry) refillQueue() {

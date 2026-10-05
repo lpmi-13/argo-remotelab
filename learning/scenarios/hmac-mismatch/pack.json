@@ -1,0 +1,12 @@
+{
+  "id": "hmac-mismatch", "title": "Encrypted value integrity failure", "level": 4,
+  "brief": "An encrypted value in the latest shop revision cannot be read. Find Argo CD's comparison error.",
+  "fix_surface": "terminal", "fix_paths": ["chart/django-app/secrets.yaml.enc"],
+  "targets": ["apps.list", "app.header", "app.conditions", "app.history"],
+  "checks": [
+    {"id": "application", "target": "apps.list", "question": "Which Application has the comparison error?", "answer": "${application}", "hint": "Use the environment label.", "why": "The list separates healthy and failed releases."},
+    {"id": "cause", "target": "app.conditions", "question": "What failed for an individual encrypted value?", "answer": "authentication", "hint": "Read the decryption error in Conditions.", "why": "A value authentication failure needs a fresh encryption from known plaintext."}
+  ],
+  "truth": {"resource": "secrets.yaml.enc", "cause": "An encrypted value fails AES-GCM authentication", "fix": "Re-encrypt from known plaintext", "evidence": "authentication"},
+  "habits": ["fix-in-git", "no-plaintext-secrets", "right-environment"]
+}

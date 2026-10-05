@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: release-policy
+  namespace: applications
+data:
+  staging-first: "true"
+  change-window: weekdays

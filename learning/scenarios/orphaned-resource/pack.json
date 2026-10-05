@@ -1,0 +1,12 @@
+{
+  "id": "orphaned-resource", "title": "Orphaned workload", "level": 3,
+  "brief": "The service is failing after a workload rename. Find the extra resource and the selector mismatch.",
+  "fix_surface": "argo-and-git", "fix_paths": ["chart/django-app/templates/deployment.yaml", "chart/django-app/templates/service.yaml"],
+  "targets": ["apps.list", "app.tree", "app.list", "app.diff", "resource.manifest", "app.history"],
+  "checks": [
+    {"id": "application", "target": "apps.list", "question": "Which Application owns the service?", "answer": "${application}", "hint": "Use the environment label.", "why": "Application ownership matters before pruning."},
+    {"id": "orphan", "target": "app.tree", "question": "Which Deployment is left behind after the rename?", "answer": "django", "hint": "Look for the Deployment marked as requiring pruning.", "why": "The tree shows desired and leftover resources together."}
+  ],
+  "truth": {"resource": "Deployment/django", "cause": "The new Deployment name and Service selector leave an orphan and no endpoints", "fix": "Restore the selector and prune only the orphan", "evidence": "django-web"},
+  "habits": ["prune-deliberately", "fix-in-git", "right-environment"]
+}

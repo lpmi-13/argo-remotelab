@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Argo CD RemoteLab</title>
+  <style>
+    :root{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#25313e;background:#f7f9fb}
+    *{box-sizing:border-box}body{margin:0}header{background:#202d3d;color:#fff;padding:14px 28px;font-size:18px;font-weight:600}
+    main{max-width:960px;margin:34px auto;padding:0 20px}h1{font-size:27px;margin:0 0 6px}p{margin:0 0 16px;color:#526272}
+    .card{background:#fff;border:1px solid #dce4eb;border-radius:4px;padding:20px;box-shadow:0 2px 9px #1c2d4015}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px}
+    label{display:block;font-weight:600;margin-bottom:5px}select,input{width:100%;padding:8px 10px;border:1px solid #bccbd7;border-radius:4px;background:#fff;color:#25313e}
+    button{border:1px solid #0a8fbb;background:#0a8fbb;color:#fff;border-radius:4px;min-height:36px;padding:8px 16px;font:inherit;font-weight:600;cursor:pointer}
+    button:disabled{opacity:.5;cursor:wait}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #0a8fbb;outline-offset:2px}
+    .actions{margin-top:18px;display:flex;gap:12px;align-items:center}.status{min-height:30px;color:#526272}
+    .error{color:#bd413c}.level{margin:20px 0 10px;font-size:16px}.catalog{padding:0;list-style:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+    .catalog li{background:#fff;border:1px solid #dce4eb;padding:12px;border-radius:4px}.catalog strong{display:block}.catalog small{color:#526272}
+    @media(prefers-color-scheme:dark){:root{background:#172330;color:#f0f5f8}.card,.catalog li{background:#263545;border-color:#46586a}p,.status,.catalog small{color:#c4d0d8}select,input{background:#263545;color:#f0f5f8;border-color:#617385}}
+  </style>
+</head>
+<body>
+<header>✦ Argo CD RemoteLab</header>
+<main>
+  <h1>Learn the Argo CD console</h1>
+  <p>Choose a mission. The lab prepares a reproducible deployment, then opens Argo CD with a coach.</p>
+  <section class="card" aria-label="Start a mission">
+    <form id="launch-form">
+      <input type="hidden" id="seed" name="seed">
+      <div class="grid">
+        <div><label for="scenario">Scenario</label><select id="scenario" name="scenario"></select></div>
+        <div><label for="mode">Assistance</label><select id="mode" name="mode"><option value="demonstration">Demonstration</option><option value="guided">Guided</option><option value="challenge">Challenge</option></select></div>
+        <div><label for="environment">Environment</label><select id="environment" name="environment"><option value="prod">Production</option><option value="staging">Staging</option></select></div>
+        <div><label for="scenario-key">Scenario key</label><input id="scenario-key" name="scenario_key" placeholder="Random if blank" autocomplete="off"></div>
+      </div>
+      <div class="actions"><button id="start" type="submit">Prepare lab</button><span id="status" class="status" role="status"></span></div>
+      <p class="small">Starting a mission stops any earlier run in this lab.</p>
+    </form>
+  </section>
+  <h2 class="level">Curriculum</h2><ul id="catalog" class="catalog"></ul>
+</main>
+<script>
+  const api='/coach/learning';
+  const status=document.querySelector('#status');
+  const button=document.querySelector('#start');
+  const escape=value=>String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[char]));
+  async function get(path){const response=await fetch(api+path);const data=await response.json();if(!response.ok)throw new Error(data.error||'Request failed');return data}
+  async function load(){
+    const catalog=await get('/api/catalog');
+    document.querySelector('#scenario').innerHTML=catalog.scenarios.map(item=>`<option value="${escape(item.id)}">Level ${item.level} · ${escape(item.title)}</option>`).join('');
+    document.querySelector('#catalog').innerHTML=catalog.scenarios.map(item=>`<li><strong>Level ${item.level} · ${escape(item.title)}</strong><small>${escape(item.brief)}</small></li>`).join('');
+    const completed=localStorage.getItem('argo-coach:orientation-complete');
+    const params=new URLSearchParams(location.search);
+    const requested=params.get('scenario');
+    const nextLevel=Number(params.get('next_level'));
+    const selected=catalog.scenarios.find(item=>item.id===requested) ||
+      (nextLevel>0 ? catalog.scenarios.find(item=>item.level>=nextLevel) : null);
+    if(selected)document.querySelector('#scenario').value=selected.id;
+    else if(!completed)document.querySelector('#scenario').value='console-orientation';
+    if(['guided','demonstration','challenge'].includes(params.get('mode')))document.querySelector('#mode').value=params.get('mode');
+    if(['prod','staging'].includes(params.get('environment')))document.querySelector('#environment').value=params.get('environment');
+    if(/^\d+$/.test(params.get('seed')||''))document.querySelector('#seed').value=params.get('seed');
+    document.querySelector('#scenario').dispatchEvent(new Event('change'));
+  }
+  document.querySelector('#launch-form').addEventListener('submit',async event=>{
+    event.preventDefault();button.disabled=true;status.classList.remove('error');status.textContent='Creating run…';
+    const payload=Object.fromEntries(new FormData(event.target));
+    if(!payload.scenario_key)delete payload.scenario_key;
+    if(payload.scenario_key||!payload.seed)delete payload.seed;
+    else payload.seed=Number(payload.seed);
+    payload.replace_existing=true;
+    try{
+      const response=await fetch(api+'/api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      const result=await response.json();if(!response.ok)throw new Error(result.error||'Could not create run');
+      const {run,session}=result;
+      const deadline=Date.now()+8*60*1000;
+      while(Date.now()<deadline){
+        const current=await get('/api/runs/'+encodeURIComponent(run.id));
+        if(current.state==='READY'){
+          const url=new URL('/argocd/applications',location.origin);
+          url.searchParams.set('coach_session',session.session_id);
+          url.searchParams.set('coach_token',session.connection_token);
+          url.searchParams.set('coach_run',run.id);
+          url.searchParams.set('coach_mode',payload.mode);
+          location.assign(url);
+          return;
+        }
+        if(current.state==='FAILED')throw new Error(current.error||'Lab preparation failed');
+        status.textContent=`Preparing… ${current.state.toLowerCase().replaceAll('_',' ')}`;
+        await new Promise(resolve=>setTimeout(resolve,2500));
+      }
+      throw new Error('Lab preparation timed out');
+    }catch(reason){status.textContent=reason.message;status.classList.add('error');button.disabled=false}
+  });
+  document.querySelector('#scenario').addEventListener('change',event=>{
+    const challenge=document.querySelector('#mode option[value="challenge"]');
+    challenge.disabled=event.target.value.startsWith('console-');
+    if(challenge.disabled&&document.querySelector('#mode').value==='challenge')document.querySelector('#mode').value='guided';
+  });
+  load().catch(reason=>{status.textContent=reason.message;status.classList.add('error')});
+</script>
+</body>
+</html>

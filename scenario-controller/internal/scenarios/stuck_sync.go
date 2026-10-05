@@ -45,6 +45,10 @@ func (s *StuckSync) Inject(gitClient *git.Client) error {
 				return fmt.Errorf("health check path not found in values.yaml")
 			}
 
+			modified = strings.Replace(modified, "postSyncVerify: false", "postSyncVerify: true", 1)
+			if !strings.Contains(modified, "postSyncVerify: true") {
+				return fmt.Errorf("post-sync verification flag not found in values.yaml")
+			}
 			return w.WriteFile(ValuesFile, []byte(modified))
 		},
 	)
@@ -65,6 +69,7 @@ func (s *StuckSync) Revert(gitClient *git.Client) error {
 				"path: /api/health/",
 				1,
 			)
+			modified = strings.Replace(modified, "postSyncVerify: true", "postSyncVerify: false", 1)
 
 			return w.WriteFile(ValuesFile, []byte(modified))
 		},

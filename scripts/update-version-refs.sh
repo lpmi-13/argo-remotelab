@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 app_image_tag=""
 rootfs_image=""
+argocd_css=""
 
 usage() {
   cat <<'EOF'
@@ -13,6 +14,7 @@ Options:
   --repo-root <path>        Repository root to update. Defaults to this checkout.
   --app-image-tag <tag>     Update first-party image tags.
   --rootfs-image <image>    Update iximiuz rootfs image reference.
+  --argocd-css <path>      Check coach tokens against Argo's compiled CSS.
   --help, -h               Show this help.
 EOF
 }
@@ -62,6 +64,11 @@ while [[ $# -gt 0 ]]; do
       [[ $# -gt 0 ]] || { echo "error: --rootfs-image requires a value." >&2; exit 1; }
       rootfs_image="$1"
       ;;
+    --argocd-css)
+      shift
+      [[ $# -gt 0 ]] || { echo "error: --argocd-css requires a value." >&2; exit 1; }
+      argocd_css="$1"
+      ;;
     --help|-h)
       usage
       exit 0
@@ -75,14 +82,21 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-if [[ -z "${app_image_tag}" && -z "${rootfs_image}" ]]; then
-  echo "error: pass at least one of --app-image-tag or --rootfs-image." >&2
+if [[ -z "${app_image_tag}" && -z "${rootfs_image}" && -z "${argocd_css}" ]]; then
+  echo "error: pass at least one of --app-image-tag, --rootfs-image or --argocd-css." >&2
   exit 1
+fi
+
+if [[ -n "${argocd_css}" ]]; then
+  (cd "${repo_root}" && node scripts/extract-argocd-tokens.mjs --css "${argocd_css}")
 fi
 
 versions_file="${repo_root}/scripts/lib/versions.sh"
 django_values="${repo_root}/sample-django-app/chart/django-app/values.yaml"
 scenario_controller_manifest="${repo_root}/manifests/applications/scenario-controller.yaml"
+learning_service_manifest="${repo_root}/manifests/applications/learning-service.yaml"
+lab_gateway_manifest="${repo_root}/manifests/applications/lab-gateway.yaml"
+lab_terminal_manifest="${repo_root}/manifests/applications/lab-terminal.yaml"
 argocd_tools_manifest="${repo_root}/playground/iximiuz/manifests/argocd-sops-config-preloaded.yaml"
 playground_manifest="${repo_root}/playground/iximiuz/manifest.yaml"
 
@@ -90,7 +104,7 @@ if [[ -n "${app_image_tag}" ]]; then
   validate_tag "${app_image_tag}"
   escaped_tag="$(escape_sed_replacement "${app_image_tag}")"
 
-  for file in "${versions_file}" "${django_values}" "${scenario_controller_manifest}" "${argocd_tools_manifest}"; do
+  for file in "${versions_file}" "${django_values}" "${scenario_controller_manifest}" "${learning_service_manifest}" "${lab_gateway_manifest}" "${lab_terminal_manifest}" "${argocd_tools_manifest}"; do
     test -f "${file}" || { echo "error: missing file ${file}." >&2; exit 1; }
   done
 
@@ -103,6 +117,11 @@ if [[ -n "${app_image_tag}" ]]; then
   sed -E -i \
     "s#(ghcr\.io/lpmi-13/argo-remotelab-scenario-controller:)[A-Za-z0-9_.-]+#\1${escaped_tag}#" \
     "${scenario_controller_manifest}"
+  for file in "${learning_service_manifest}" "${lab_gateway_manifest}" "${lab_terminal_manifest}"; do
+    sed -E -i \
+      "s#(ghcr\.io/lpmi-13/argo-remotelab-(learning-service|lab-gateway|lab-terminal):)[A-Za-z0-9_.-]+#\1${escaped_tag}#" \
+      "${file}"
+  done
   sed -E -i \
     "s#(ghcr\.io/lpmi-13/argo-remotelab-argocd-tools:)[A-Za-z0-9_.-]+#\1${escaped_tag}#" \
     "${argocd_tools_manifest}"

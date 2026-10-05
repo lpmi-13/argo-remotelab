@@ -1,0 +1,333 @@
+{
+  "version": 1,
+  "scenarios": {
+    "console-orientation": {
+      "briefing": {
+        "source": "Console handover",
+        "headline": "Which shop release is actually running?",
+        "summary": "A teammate needs a status update for the shop release in ${environment}. The Git branch alone cannot tell us what Argo CD has deployed.",
+        "impact": "This is a baseline investigation. Establish the Application, current health and deployed revision before treating a later change as an incident.",
+        "objective": "Use the Applications list, Application header and History to give an evidence-backed release status."
+      },
+      "steps": {
+        "application": {
+          "action": "Find the ${environment} shop release in Applications and open it.",
+          "reason": "The list contains more than one environment. Confirming the Application first keeps every later observation tied to the right release.",
+          "learning": "This Application is the release whose status we were asked to verify."
+        },
+        "health": {
+          "action": "Read the health badge in the Application header.",
+          "reason": "The header gives the current workload state; a Git commit by itself says nothing about whether the workload is healthy.",
+          "learning": "The health badge is the current workload signal. Keep it separate from the sync status and Git revision."
+        },
+        "revision": {
+          "action": "Open History and Rollback and read the most recent deployed revision.",
+          "reason": "History ties an Argo sync event to a commit, so we can distinguish the deployed version from the latest branch tip.",
+          "learning": "History identifies the revision Argo applied. This is the commit to quote in a release status update."
+        }
+      }
+    },
+    "console-resources": {
+      "briefing": {
+        "source": "Deployment handover",
+        "headline": "Verify the shop workload's readiness check",
+        "summary": "The team wants to know which readiness endpoint the ${environment} shop Deployment will use. A value in the source chart is only useful if it matches the desired workload in Argo CD.",
+        "impact": "This is a baseline check before a release. The endpoint decides when Kubernetes can route traffic to a new pod.",
+        "objective": "Find the owned Deployment and read its readiness probe from the Desired manifest."
+      },
+      "steps": {
+        "deployment": {
+          "action": "Open the Application tree and find its Deployment node.",
+          "reason": "The tree shows resources owned by this Application. Start there to avoid inspecting an unrelated workload in the same cluster.",
+          "learning": "The Deployment in the tree is the workload Argo will reconcile for this release."
+        },
+        "readiness-path": {
+          "action": "Open the Deployment's Manifest tab, select Desired, and read readinessProbe.httpGet.path.",
+          "reason": "Desired is the rendered configuration Argo intends to apply. It is the right place to verify the probe before judging live pod behavior.",
+          "learning": "The Desired manifest records the readiness path that new pods will receive on the next reconciliation."
+        }
+      }
+    },
+    "console-history": {
+      "briefing": {
+        "source": "Release handover",
+        "headline": "Confirm what Argo CD deployed",
+        "summary": "Release Engineering asks for the latest shop deployment in ${environment}. A successful push does not prove that Argo applied it.",
+        "impact": "This is a release verification exercise. An inaccurate revision or sync result could send responders to the wrong change during a later incident.",
+        "objective": "Find the deployed Git revision and the result of the latest sync operation."
+      },
+      "steps": {
+        "deployed-revision": {
+          "action": "Open History and Rollback and read the latest deployed revision.",
+          "reason": "History records the revision associated with the deployment, rather than only the revision currently visible in Git.",
+          "learning": "This revision is the deployment Argo recorded for the shop Application."
+        },
+        "last-operation": {
+          "action": "Open Sync Status and inspect the latest operation phase.",
+          "reason": "A revision in History needs its operation result. The operation panel shows whether the apply completed or stopped partway through.",
+          "learning": "The operation phase tells us whether the latest sync finished successfully."
+        }
+      }
+    },
+    "missing-configmap": {
+      "briefing": {
+        "source": "Pod startup alert",
+        "headline": "Shop pods are failing to start",
+        "summary": "After a shop release in ${environment}, the new pods are not starting. Argo CD shows an unhealthy Application, but that badge does not name the missing dependency.",
+        "impact": "The intended replica count may not be available until the startup failure is fixed.",
+        "objective": "Identify the affected Application, read the pod warning, name the dependency, and verify the repaired revision."
+      },
+      "steps": {
+        "application": {
+          "action": "Find the unhealthy ${environment} shop Application in Applications.",
+          "reason": "Production and staging are both present. The environment label and health badge identify the release that needs evidence before any edit.",
+          "learning": "The affected Application is now scoped; inspect only resources that belong to it."
+        },
+        "missing-name": {
+          "action": "Open the failing Pod in the Application tree and read its Events tab.",
+          "reason": "A pod that cannot start often has a specific Kubernetes warning. Events can identify a missing dependency that the Application health badge cannot.",
+          "learning": "The warning names the dependency the pod could not load. Compare that name with the Deployment template in Git before editing it."
+        }
+      },
+      "repair": {
+        "action": "Restore a valid ConfigMap reference in the Deployment template, commit and push it, then watch Argo reconcile.",
+        "reason": "The pod warning points to a dependency in desired state. Changing the chart in Git makes the repair survive Argo's next reconciliation."
+      }
+    },
+    "stuck-sync": {
+      "briefing": {
+        "source": "Release health alert",
+        "headline": "The shop release is still progressing",
+        "summary": "The ${environment} shop sync has not settled and its new workload is not ready. A running operation tells us the release is blocked, but not which setting keeps the pods unready.",
+        "impact": "The new release cannot safely receive traffic while readiness is failing.",
+        "objective": "Locate the blocked Application, inspect the desired readiness probe, repair its source and confirm the deployed revision."
+      },
+      "steps": {
+        "application": {
+          "action": "Find the ${environment} shop Application and check that its release is still progressing.",
+          "reason": "The Applications list establishes which environment is affected before we inspect or terminate a sync operation.",
+          "learning": "This is the release whose readiness problem is holding the sync open."
+        },
+        "probe-path": {
+          "action": "Open Deployment/django from the tree, then read readinessProbe.httpGet.path in its Desired manifest.",
+          "reason": "A Progressing badge only reports the symptom. The Desired manifest reveals the probe path Argo will keep applying to every new pod.",
+          "learning": "The configured path cannot answer the expected readiness request. A retry alone will reproduce the same unready pods."
+        }
+      },
+      "repair": {
+        "action": "Terminate the operation that cannot finish in Sync Status, correct the probe path in Git, then let Argo sync the new commit.",
+        "reason": "The running operation must clear before another sync, and the probe must change in Git so reconciliation does not restore the bad value."
+      }
+    },
+    "stale-job": {
+      "briefing": {
+        "source": "Release pipeline alert",
+        "headline": "The shop rollout stopped before its Deployment updated",
+        "summary": "The ${environment} release is blocked during sync. The Deployment is still on the old version, so the operation steps must show what ran first.",
+        "impact": "The new release cannot proceed until the blocking hook completes.",
+        "objective": "Find the failed hook phase, read its Job log, repair the source, and verify a completed sync."
+      },
+      "steps": {
+        "application": {
+          "action": "Find the blocked ${environment} shop Application in Applications.",
+          "reason": "Scope the release before investigating its hooks; the other environment may have completed normally.",
+          "learning": "This is the Application whose operation needs inspection."
+        },
+        "hook": {
+          "action": "Open Sync Status and read the failed hook entry and phase.",
+          "reason": "The operation panel orders the sync stages. It tells us whether the failure happened before the Deployment could update.",
+          "learning": "The failed phase runs before the main apply, so the rollout cannot advance until that hook succeeds."
+        },
+        "log": {
+          "action": "Open the failed migration Job in the tree and read its Logs tab.",
+          "reason": "The phase identifies where the sync stopped; the Job's own output explains why the hook exited.",
+          "learning": "The log line is the direct failure evidence to carry into the Git repair and incident note."
+        }
+      },
+      "repair": {
+        "action": "Repair the migration hook in Git, commit and push it, then resync the Application.",
+        "reason": "The hook is part of desired release configuration; a manual retry without a source change will run the same failing step."
+      }
+    },
+    "orphaned-resource": {
+      "briefing": {
+        "source": "Service availability alert",
+        "headline": "A workload rename left the shop service without endpoints",
+        "summary": "Following a workload rename in ${environment}, the shop service is unhealthy and Argo CD shows an extra resource. We need to know which workload is desired before pruning anything.",
+        "impact": "Traffic may have no ready backend while the Service and Deployment disagree.",
+        "objective": "Identify Application ownership and the leftover Deployment, then compare desired selectors before deciding what can be safely pruned."
+      },
+      "steps": {
+        "application": {
+          "action": "Find the ${environment} shop Application and open its resource tree.",
+          "reason": "A prune affects Application-owned resources. Confirm ownership and environment before considering a delete.",
+          "learning": "The affected Application owns the resources we need to compare."
+        },
+        "orphan": {
+          "action": "In the tree, find the Deployment marked as extra or requiring prune.",
+          "reason": "The tree puts desired and leftover resources side by side. The extra node is evidence of the rename, not permission to delete every unhealthy resource.",
+          "learning": "That Deployment remains from the earlier name. Compare Service selectors and the desired Deployment before pruning it."
+        }
+      },
+      "repair": {
+        "action": "Restore a matching Service selector and Deployment in Git; inspect Diff, then prune only the leftover Deployment.",
+        "reason": "Fixing the selector restores endpoints, and a targeted prune removes the orphan without deleting the intended workload."
+      }
+    },
+    "sops-decrypt-failure": {
+      "briefing": {
+        "source": "Argo comparison alert",
+        "headline": "The encrypted shop configuration will not render",
+        "summary": "After an encrypted configuration update in ${environment}, Argo CD cannot compare the latest revision. It may have no usable resource tree because manifest generation stopped first.",
+        "impact": "Argo cannot safely apply the new desired state until the encrypted source can be read.",
+        "objective": "Find the affected Application and identify the failing decryption component from Conditions before repairing the encrypted file."
+      },
+      "steps": {
+        "application": {
+          "action": "Find the ${environment} Application with a comparison error.",
+          "reason": "Comparison errors appear before resource health can be judged. Locate the affected release without relying on a rendered tree.",
+          "learning": "This Application is blocked before Argo can compare the new manifests."
+        },
+        "cause": {
+          "action": "Open Conditions and read the manifest generation error.",
+          "reason": "When rendering fails, a Pod Events tab may not exist for the new revision. Conditions carry the source error returned by manifest generation.",
+          "learning": "The condition identifies the decryption component that prevents Argo from rendering the encrypted source."
+        }
+      },
+      "repair": {
+        "action": "Re-encrypt the secret from known plaintext in the lab terminal, commit and push the encrypted file, then wait for Argo to compare it.",
+        "reason": "A damaged encrypted data key cannot be repaired by retrying sync. A valid encrypted source lets manifest generation resume."
+      }
+    },
+    "sops-global-mac-mismatch": {
+      "briefing": {
+        "source": "Argo comparison alert",
+        "headline": "Encrypted values failed an integrity check",
+        "summary": "The latest encrypted configuration in ${environment} cannot be rendered. Argo CD reports a comparison error before it can show a new desired resource state.",
+        "impact": "The release cannot advance while the encrypted file fails integrity validation.",
+        "objective": "Read the exact integrity field in Conditions, repair the encrypted file, and verify the new revision."
+      },
+      "steps": {
+        "application": {
+          "action": "Find the ${environment} shop Application with the comparison error.",
+          "reason": "A render failure can look similar to other source failures in the list. First tie the error to the correct release.",
+          "learning": "This is the Application whose desired manifests could not be produced."
+        },
+        "cause": {
+          "action": "Open Conditions and find the integrity field named by the error.",
+          "reason": "Conditions hold the manifest generation message. Naming the field distinguishes a whole-file integrity mismatch from a missing decryption key.",
+          "learning": "The named integrity field explains why SOPS rejected the file before Argo could render the chart."
+        }
+      },
+      "repair": {
+        "action": "Recover the known values in the terminal and re-encrypt the file with a fresh integrity value, then commit and push.",
+        "reason": "The integrity record must match the encrypted values. Re-running sync against the same file cannot make them agree."
+      }
+    },
+    "hmac-mismatch": {
+      "briefing": {
+        "source": "Argo comparison alert",
+        "headline": "An encrypted value blocked the shop release",
+        "summary": "An encrypted values update in ${environment} caused a comparison error. Argo cannot render the new configuration, and the condition points to an individual encrypted value without yet establishing the failure class.",
+        "impact": "The new release remains blocked until the value can be decrypted and authenticated.",
+        "objective": "Identify the affected Application and the failure class in Conditions, then restore a valid encrypted value."
+      },
+      "steps": {
+        "application": {
+          "action": "Find the ${environment} Application with the comparison error.",
+          "reason": "The list separates the failed release from the healthy one before we inspect the encrypted source.",
+          "learning": "This is the release whose manifest generation is blocked."
+        },
+        "cause": {
+          "action": "Open Conditions and read the error for the encrypted value.",
+          "reason": "The condition text distinguishes a value authentication failure from a missing key or a whole-file integrity mismatch.",
+          "learning": "The encrypted value failed authentication, so the repair needs known plaintext and fresh encryption."
+        }
+      },
+      "repair": {
+        "action": "Re-encrypt the known-good plaintext value in the terminal, commit the encrypted file, and let Argo compare the new revision.",
+        "reason": "Authentication verifies the encrypted value itself. A retry or skipped integrity check cannot supply valid ciphertext."
+      }
+    },
+    "wrong-type-sops": {
+      "briefing": {
+        "source": "Encrypted config update",
+        "headline": "The latest secrets change blocked the release",
+        "summary": "After an encrypted secrets update in ${environment}, Argo CD cannot complete rendering or apply. The error names a values key, but we have not yet established what shape the chart expects.",
+        "impact": "The release cannot settle until the secrets input is valid for the chart.",
+        "objective": "Read the error's key and stage, correct the encrypted values, and verify a clean reconciliation."
+      },
+      "steps": {
+        "application": {
+          "action": "Find the blocked ${environment} shop Application.",
+          "reason": "Scope the release first; the failure may surface as a comparison condition or as a failed operation.",
+          "learning": "This is the Application whose encrypted update needs investigation."
+        },
+        "cause": {
+          "action": "Read Conditions or Sync Status and identify the values key named by the error.",
+          "reason": "The error's stage tells us whether the chart failed to render or the rendered resources failed to apply. Its key points to the input to inspect.",
+          "learning": "The named key has the wrong shape for the chart. Fix the encrypted source before trying another sync."
+        }
+      },
+      "repair": {
+        "action": "Re-encrypt a valid secrets map in the terminal, commit and push it; clear any failed operation so Argo can sync.",
+        "reason": "The chart expects key-value secrets. Editing the encrypted source makes the corrected shape durable."
+      }
+    },
+    "env-drift": {
+      "briefing": {
+        "source": "Environment health alert",
+        "headline": "One shop environment is unhealthy",
+        "summary": "The shop release in ${environment} is failing while its peer environment remains healthy. The two Applications should be compared before assuming a shared chart defect.",
+        "impact": "Only one environment is affected, so a broad change risks disturbing the healthy release.",
+        "objective": "Use the healthy peer to scope the issue, inspect the failing release's desired readiness setting, and verify a targeted repair."
+      },
+      "steps": {
+        "application": {
+          "action": "Compare the two shop cards in Applications and open the unhealthy ${environment} release.",
+          "reason": "The healthy peer is a control case. Its status helps narrow the issue to environment-specific configuration.",
+          "learning": "The failing release is scoped to one environment; compare its desired configuration with the healthy peer."
+        },
+        "probe-path": {
+          "action": "Open the failing Deployment's Desired manifest and read readinessProbe.httpGet.path.",
+          "reason": "The healthy peer narrows the scope to one environment. The failing release's Desired manifest shows the exact probe Argo keeps applying there.",
+          "learning": "The path in the failing release is the setting to compare with the healthy environment's source before making a scoped edit."
+        }
+      },
+      "repair": {
+        "action": "Restore the affected environment's readiness path in its Git values file, commit and push, then verify Argo's new revision.",
+        "reason": "The healthy environment is evidence for the expected setting. A scoped Git edit preserves the working release."
+      }
+    },
+    "repo-auth": {
+      "briefing": {
+        "source": "Source fetch alert",
+        "headline": "Argo CD cannot fetch the shop source",
+        "summary": "The ${environment} shop Application stopped fetching its repository after a source setting changed. Workloads already running may still be healthy, while desired-state comparison is blocked.",
+        "impact": "Argo cannot confirm or apply new changes until repository access works again.",
+        "objective": "Find the affected Application, read the repository error, compare it with a working repository entry, and verify recovery."
+      },
+      "steps": {
+        "application": {
+          "action": "Find the ${environment} Application with a source or comparison error.",
+          "reason": "A source failure can leave old pods running. The Applications list shows which release has lost reconciliation even if health still looks acceptable.",
+          "learning": "This is the Application whose source connection needs investigation."
+        },
+        "source": {
+          "action": "Open Conditions and read the repository URL and transport in the error.",
+          "reason": "A repository fetch failure occurs before manifests can be compared. Conditions distinguish access to source from a broken chart or workload.",
+          "learning": "The failing transport points to an Application source setting. Compare it with the working repository entry before changing credentials or URL."
+        },
+        "working-source": {
+          "action": "Open Settings → Repositories and inspect the connected Gitea entry.",
+          "reason": "We need a known-good URL and transport before editing the Application source. The repository entry shows the connection Argo can already use.",
+          "learning": "The connected repository uses a different transport from the failing Application. Restore the source URL to match that working entry."
+        }
+      },
+      "repair": {
+        "action": "Compare the Application source with the working repository entry, restore its authenticated URL, and refresh the Application.",
+        "reason": "The error is in source access, so changing workload manifests would not help Argo fetch the repository."
+      }
+    }
+  }
+}

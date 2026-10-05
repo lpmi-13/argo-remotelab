@@ -1,0 +1,15 @@
+{
+  "app.conditions": [
+    ".application-conditions"
+  ],
+  "app.operation": [
+    ".application-operation-state__icons_container_padding",
+    ".application-operation-state__message"
+  ],
+  "app.history": [
+    ".application-deployment-history"
+  ],
+  "app.diff": [
+    ".application-resources-diff"
+  ]
+}

@@ -61,7 +61,7 @@ set_argocd_admin_password() {
 
     password_mtime="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     kubectl -n argocd patch secret argocd-secret --type=merge \
-        --patch "{\"stringData\":{\"admin.password\":\"${ARGOCD_ADMIN_PASSWORD_HASH}\",\"admin.passwordMtime\":\"${password_mtime}\"}}" >/dev/null
+        --patch "{\"stringData\":{\"admin.password\":\"${ARGOCD_ADMIN_PASSWORD_HASH}\",\"admin.passwordMtime\":\"${password_mtime}\",\"accounts.learner.password\":\"${ARGOCD_ADMIN_PASSWORD_HASH}\",\"accounts.learner.passwordMtime\":\"${password_mtime}\"}}" >/dev/null
     kubectl -n argocd delete secret argocd-initial-admin-secret --ignore-not-found=true >/dev/null
     kubectl -n argocd rollout restart deployment/argocd-server >/dev/null
     kubectl -n argocd rollout status deployment/argocd-server --timeout=300s >/dev/null
@@ -69,9 +69,8 @@ set_argocd_admin_password() {
 
 configure_argocd_server_for_vm() {
     kubectl -n argocd patch configmap argocd-cmd-params-cm --type=merge \
-        --patch '{"data":{"server.insecure":"true","server.rootpath":null,"server.basehref":null}}' >/dev/null
-    kubectl -n argocd patch deployment argocd-server --type=strategic \
-        --patch-file "${IXIMIUZ_DIR}/manifests/argocd-server-hostport.yaml" >/dev/null
+        --patch '{"data":{"server.insecure":"true","server.rootpath":"/argocd","server.basehref":"/argocd"}}' >/dev/null
+    kubectl -n argocd rollout restart deployment/argocd-server >/dev/null
     kubectl -n argocd rollout status deployment/argocd-server --timeout=300s >/dev/null
 }
 
@@ -143,10 +142,11 @@ init_gitea_repo() {
     trap "rm -rf '${work_dir}'" RETURN
 
     cd "${work_dir}"
-    git init -q
+    git init -q -b main
     git config user.email "remotelab@localhost"
     git config user.name "Remotelab"
     cp -R "${REPO_DIR}/sample-django-app/chart" .
+    cp -R "${REPO_DIR}/sample-django-app/platform" .
 
     cat > chart/django-app/.sops.yaml <<SOPSEOF
 creation_rules:
@@ -165,6 +165,9 @@ SECRETSEOF
     sops encrypt --age "${age_public_key}" --input-type yaml --output-type yaml \
         "${work_dir}/secrets-plain.yaml" > chart/django-app/secrets.yaml.enc
     rm -f "${work_dir}/secrets-plain.yaml"
+    cp -R chart/django-app chart/django-app-staging
+    sed -i.bak 's/DB_HOST: "postgresql"/DB_HOST: "postgresql.applications.svc.cluster.local"/;s/APP_ENVIRONMENT: "production"/APP_ENVIRONMENT: "staging"/' chart/django-app-staging/values.yaml
+    rm -f chart/django-app-staging/values.yaml.bak
     rm -f chart/django-app-*.tgz
 
     cat > README.md <<'READMEEOF'
@@ -175,8 +178,10 @@ READMEEOF
 
     git add -A
     git commit -q -m "Initial commit: Django app with Helm chart and SOPS secrets"
+    git tag baseline
     git remote add origin "http://remotelab:remotelab@127.0.0.1:30082/remotelab/django-app.git"
     git push -f -u origin main -q
+    git push origin baseline -q
 
     cd "${REPO_DIR}"
 }
@@ -185,8 +190,10 @@ echo "Deploying the preloaded iximiuz VM stack..."
 wait_for_k3s_api
 
 cleanup_namespace applications
+cleanup_namespace shop-staging
 cleanup_namespace argocd
 wait_for_namespace_deletion applications
+wait_for_namespace_deletion shop-staging
 wait_for_namespace_deletion argocd
 
 kubectl apply -f "${REPO_DIR}/manifests/applications/namespace.yaml" >/dev/null
@@ -197,6 +204,7 @@ sed 's/imagePullPolicy: Always/imagePullPolicy: IfNotPresent/g' "${REPO_DIR}/man
 kubectl -n argocd wait --for=condition=available --timeout=300s deployment/argocd-server >/dev/null
 
 configure_argocd_server_for_vm
+kubectl apply -f "${REPO_DIR}/manifests/gitops/argocd-learner-rbac.yaml" >/dev/null
 set_argocd_admin_password
 
 age_public_key="$(create_sops_key)"
@@ -210,6 +218,8 @@ kubectl -n applications wait --for=condition=available --timeout=300s deployment
 kubectl -n applications wait --for=condition=available --timeout=300s deployment/gitea >/dev/null
 kubectl -n applications patch deployment gitea --type=strategic \
     --patch-file "${IXIMIUZ_DIR}/manifests/gitea-hostport.yaml" >/dev/null
+kubectl -n applications set env deployment/gitea \
+    "GITEA__server__ROOT_URL=${LAB_PUBLIC_URL:-http://127.0.0.1:30080}/gitea/" >/dev/null
 kubectl -n applications rollout status deployment/gitea --timeout=300s >/dev/null
 
 kubectl -n applications delete job gitea-init-user --ignore-not-found=true >/dev/null 2>&1 || true
@@ -233,7 +243,10 @@ stringData:
   password: remotelab
 EOF
 
+kubectl apply -f "${REPO_DIR}/argocd-apps/projects.yaml" >/dev/null
 kubectl apply -f "${REPO_DIR}/argocd-apps/django-app.yaml" >/dev/null
+kubectl apply -f "${REPO_DIR}/argocd-apps/platform-apps.yaml" >/dev/null
+bash "${REPO_DIR}/scripts/configure-gitea-webhook.sh" "${GITEA_URL}"
 
 for _ in $(seq 1 36); do
     ready_replicas="$(kubectl -n applications get deployment django -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
@@ -242,15 +255,24 @@ for _ in $(seq 1 36); do
     fi
     sleep 5
 done
+bash "${REPO_DIR}/scripts/seed-history.sh" "${GITEA_URL}"
 
 kubectl apply -f "${REPO_DIR}/manifests/applications/scenario-controller.yaml" >/dev/null
 kubectl -n applications rollout status deployment/scenario-controller --timeout=180s >/dev/null
 
-FIRST_SCENARIO_TIMEOUT_SECONDS="${FIRST_SCENARIO_TIMEOUT_SECONDS:-420}" \
-    "${REPO_DIR}/scripts/wait-first-scenario-ready.sh"
+kubectl apply -f "${REPO_DIR}/manifests/applications/learning-service.yaml" >/dev/null
+kubectl -n applications rollout status deployment/learning-service --timeout=180s >/dev/null
+kubectl apply -f "${REPO_DIR}/manifests/applications/lab-terminal.yaml" >/dev/null
+kubectl -n applications rollout status deployment/lab-terminal --timeout=180s >/dev/null
+kubectl apply -f "${REPO_DIR}/manifests/applications/lab-gateway.yaml" >/dev/null
+kubectl -n applications patch deployment lab-gateway --type=strategic \
+    --patch-file "${IXIMIUZ_DIR}/manifests/lab-gateway-hostport.yaml" >/dev/null
+kubectl -n applications rollout status deployment/lab-gateway --timeout=180s >/dev/null
+
+# The launcher creates the first run after the baseline is healthy.
 
 echo "GitOps Failure Lab is ready:"
-echo "  ArgoCD: http://127.0.0.1:30080"
+echo "  Lab:    http://127.0.0.1:30080"
 echo "  Gitea:  http://127.0.0.1:30082"
 echo "  Login:  admin / ${ARGOCD_ADMIN_PASSWORD}"
 echo ""

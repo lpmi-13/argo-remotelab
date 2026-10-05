@@ -113,6 +113,7 @@ spec:
 
           # Copy the Helm chart
           cp -r /tmp/source/sample-django-app/chart .
+          cp -r /tmp/source/sample-django-app/platform .
 
           # Create .sops.yaml at the chart level
           cat > chart/django-app/.sops.yaml <<EOF
@@ -134,6 +135,8 @@ spec:
           export SOPS_AGE_KEY_FILE=/tmp/age-key.txt
 
           sops --encrypt --age "$AGE_PUBLIC_KEY" /tmp/secrets-plain.yaml > chart/django-app/secrets.yaml.enc
+          cp -r chart/django-app chart/django-app-staging
+          sed -i 's/DB_HOST: "postgresql"/DB_HOST: "postgresql.applications.svc.cluster.local"/;s/APP_ENVIRONMENT: "production"/APP_ENVIRONMENT: "staging"/' chart/django-app-staging/values.yaml
           echo "Created encrypted secrets file"
 
           # Verify the encrypted file
@@ -165,9 +168,11 @@ spec:
           git init
           git add -A
           git commit -m "Initial commit: Django app with Helm chart and SOPS secrets"
+          git tag baseline
 
           git remote add origin "http://$USERNAME:$PASSWORD@gitea:3000/$USERNAME/$REPO_NAME.git"
           git pull origin main --allow-unrelated-histories --no-edit 2>&1 || true
           git push -f -u origin main 2>&1
+          git push origin baseline 2>&1
 
           echo "Django app repository initialized successfully"

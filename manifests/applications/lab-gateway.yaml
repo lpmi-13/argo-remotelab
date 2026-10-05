@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lab-gateway
+  namespace: applications
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: lab-gateway}
+  template:
+    metadata:
+      labels: {app: lab-gateway}
+    spec:
+      containers:
+      - name: gateway
+        image: ghcr.io/lpmi-13/argo-remotelab-lab-gateway:v7
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8080
+        resources:
+          requests: {cpu: 25m, memory: 32Mi}
+          limits: {cpu: 200m, memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lab-gateway
+  namespace: applications
+spec:
+  selector: {app: lab-gateway}
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http

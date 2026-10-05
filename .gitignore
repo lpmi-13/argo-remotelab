@@ -65,6 +65,10 @@ charts/*/charts/
 *.tar.gz
 build/
 dist/
+node_modules/
+__pycache__/
+*.pyc
+scenario-recorder/artifacts/
 
 # Locally cloned django-app (if you clone it into this directory)
 django-app/

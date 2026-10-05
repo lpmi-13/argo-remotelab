@@ -39,20 +39,14 @@ spec:
             sleep 5
           done
           echo "Gitea health endpoint is responding!"
-          # Additional wait to ensure Gitea is fully initialized and not in install mode
-          echo "Waiting additional time for Gitea to fully initialize..."
-          sleep 15
       containers:
       - name: create-admin
-        image: gitea/gitea:1.20
+        image: gitea/gitea:1.22
         command:
         - sh
         - -c
         - |
           echo "Creating Gitea admin user..."
-
-          # Wait a moment to ensure Gitea is fully ready
-          sleep 5
 
           # Read database password from mounted secret
           DB_PASSWORD=$(cat /secrets/db-password)

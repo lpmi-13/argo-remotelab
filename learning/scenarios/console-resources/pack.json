@@ -1,0 +1,12 @@
+{
+  "id": "console-resources", "title": "Read a resource", "level": 1,
+  "brief": "Open the shop Application for the named environment. Find its Deployment in the tree, then inspect the Desired manifest to see its readiness probe.",
+  "fix_surface": "none", "fix_paths": [],
+  "targets": ["apps.list", "app.tree", "resource.summary", "resource.manifest"],
+  "checks": [
+    {"id": "deployment", "target": "app.tree", "question": "What is the Deployment named?", "answer": "django", "hint": "Find the Deployment node in the Application tree.", "why": "The tree shows which resources this Application owns."},
+    {"id": "readiness-path", "target": "resource.manifest", "question": "What path does the Deployment's readiness probe use?", "answer": "/api/health/", "hint": "Select the Deployment and open its Desired manifest. Look under readinessProbe.httpGet.", "why": "The Desired manifest shows the probe Argo will apply."}
+  ],
+  "truth": {"resource": "Deployment/django", "cause": "No incident", "fix": "No fix needed"},
+  "habits": []
+}

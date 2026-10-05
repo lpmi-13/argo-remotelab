@@ -2,7 +2,7 @@ kind: playground
 name: argo-remotelab-3bf4e8fb
 base: flexbox
 title: Argo RemoteLab
-description: Diagnose ArgoCD and SOPS GitOps failures in a preloaded k3s VM.
+description: Learn the Argo CD console by diagnosing and fixing GitOps failures.
 categories:
   - kubernetes
   - ci-cd
@@ -17,12 +17,10 @@ playground:
         - name: laborant
           default: true
           welcome: |
-            This lab opens after the first GitOps failure has already been injected and detected by ArgoCD.
-
-            Click the tab to open the argocd web UI and diagnose the issue.
+            Open the argocd tab to choose a mission and assistance mode.
 
             Credentials:
-            - ArgoCD: admin / remotelab
+            - Argo CD: learner / remotelab
 
             Clone the lab repo to fix scenarios that need a git push:
               git clone http://remotelab:remotelab@127.0.0.1:30082/remotelab/django-app.git
@@ -56,12 +54,17 @@ playground:
       machine: cplane-01
       init: true
       user: root
-      timeout_seconds: 900
+      timeout_seconds: 1800
       run: |-
         #!/bin/bash
         set -euo pipefail
 
-        FIRST_SCENARIO_TIMEOUT_SECONDS=840 /opt/argo-remotelab/scripts/wait-first-scenario-ready.sh
+        for _ in $(seq 1 360); do
+          curl -fsS http://127.0.0.1:30080/healthz >/dev/null && exit 0
+          sleep 5
+        done
+        echo 'lab gateway did not become ready' >&2
+        exit 1
   accessControl:
     canList:
       - owner

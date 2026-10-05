@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: learning-service
+  namespace: applications
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: learning-service}
+  template:
+    metadata:
+      labels: {app: learning-service}
+    spec:
+      containers:
+      - name: learning-service
+        image: ghcr.io/lpmi-13/argo-remotelab-learning-service:v7
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8091
+        env:
+        - name: SCENARIO_CONTROLLER_URL
+          value: http://scenario-controller.applications.svc.cluster.local:8092
+        - name: GITEA_WEBHOOK_SECRET
+          value: remotelab-local-webhook
+        - name: LAB_TERMINAL_TOKEN
+          value: remotelab-local-terminal
+        - name: ARGOCD_URL
+          value: http://argocd-server.argocd.svc.cluster.local:80/argocd
+        - name: ARGOCD_USER
+          value: learner
+        - name: ARGOCD_PASSWORD
+          value: remotelab
+        - name: GITEA_URL
+          value: http://gitea.applications.svc.cluster.local:3000
+        - name: GITEA_USER
+          value: remotelab
+        - name: GITEA_PASSWORD
+          value: remotelab
+        resources:
+          requests: {cpu: 25m, memory: 48Mi}
+          limits: {cpu: 200m, memory: 192Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: learning-service
+  namespace: applications
+spec:
+  selector: {app: learning-service}
+  ports:
+  - name: http
+    port: 8091
+    targetPort: http

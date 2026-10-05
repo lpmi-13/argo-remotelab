@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -13,30 +13,56 @@ ARGOCD_ADMIN_PASSWORD="remotelab"
 ARGOCD_ADMIN_PASSWORD_HASH='$2a$10$53xm8W5NWtQbIe2oMGQlheoTFSxh4El7pz1Mdf3NHiRGdund2oPya'
 IMAGE_TAG="${IMAGE_TAG:-${DEFAULT_FIRST_PARTY_IMAGE_TAG}}"
 SCENARIO_CONTROLLER_IMAGE="${SCENARIO_CONTROLLER_IMAGE_REPO}:${IMAGE_TAG}"
+LEARNING_SERVICE_IMAGE="${LEARNING_SERVICE_IMAGE_REPO}:${IMAGE_TAG}"
+LAB_GATEWAY_IMAGE="${LAB_GATEWAY_IMAGE_REPO}:${IMAGE_TAG}"
+LAB_TERMINAL_IMAGE="${LAB_TERMINAL_IMAGE_REPO}:${IMAGE_TAG}"
 GITEA_LOCAL_URL="http://localhost:3000"
-GITEA_PORT_FORWARD_LOG="/tmp/argo-remotelab-gitea-pf.log"
 
 show_help() {
     echo "Usage: ./deploy-all.sh [OPTIONS]"
     echo ""
-    echo "Deploy the GitOps failure lab: k3s + ArgoCD + Gitea + Django app + Scenario Controller"
+    echo "Deploy the GitOps failure lab. Reuse a ready lab; otherwise run the full setup."
     echo ""
     echo "Options:"
-    echo "  --skip-cleanup    Skip cleanup of existing resources"
+    echo "  --warm            Require an existing lab and run the warm deployment"
+    echo "  --full            Rebuild the lab even when a warm deployment is available"
+    echo "  --skip-cleanup    Run the full setup without deleting existing resources"
+    echo "  COLIMA_PROFILE    Environment variable for the macOS Colima profile (default: argo-remotelab)"
     echo "  --help, -h        Show this help message"
     echo ""
-    exit 0
 }
 
 SKIP_CLEANUP=false
-if [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
-    show_help
-elif [[ "$1" == "--skip-cleanup" ]]; then
-    SKIP_CLEANUP=true
-elif [[ -n "$1" ]]; then
-    echo "Error: Unknown option '$1'"
-    show_help
+if (( $# > 1 )); then
+    echo "Error: Pass at most one option" >&2
+    show_help >&2
+    exit 2
 fi
+case "${1:-}" in
+  --help|-h) show_help; exit 0 ;;
+  --warm) exec bash "$SCRIPT_DIR/deploy-warm.sh" ;;
+  --full) ;;
+  --skip-cleanup) SKIP_CLEANUP=true ;;
+  "")
+    if warm_check_output=$(bash "$SCRIPT_DIR/deploy-warm.sh" --check 2>&1); then
+        echo "Existing lab is ready; running warm deployment."
+        exec bash "$SCRIPT_DIR/deploy-warm.sh"
+    else
+        warm_check_status=$?
+        printf '%s\n' "$warm_check_output" >&2
+        if [[ "$warm_check_status" -ne 1 ]]; then
+            echo "Warm deployment check could not run; full deployment was not started." >&2
+            exit "$warm_check_status"
+        fi
+        echo "Existing lab is not ready; running the full deployment."
+    fi
+    ;;
+  *)
+    echo "Error: Unknown option '$1'" >&2
+    show_help >&2
+    exit 2
+    ;;
+esac
 
 run_privileged() {
     if [ "$(id -u)" -eq 0 ]; then
@@ -44,47 +70,6 @@ run_privileged() {
     else
         sudo "$@"
     fi
-}
-
-stop_gitea_port_forward() {
-    local pid
-    while read -r pid; do
-        [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
-    done < <(ps -eo pid=,comm=,args= | awk '$2 == "kubectl" && /port-forward/ && /gitea/ && /3000:3000/ {print $1}')
-}
-
-print_gitea_port_forward_log() {
-    if [ -s "$GITEA_PORT_FORWARD_LOG" ]; then
-        echo "  Port-forward log ($GITEA_PORT_FORWARD_LOG):"
-        sed -n '1,120p' "$GITEA_PORT_FORWARD_LOG" | sed 's/^/    /'
-    else
-        echo "  Port-forward log is empty: $GITEA_PORT_FORWARD_LOG"
-    fi
-}
-
-wait_for_gitea_port_forward() {
-    local pf_pid="$1"
-    local waited=0
-    local max_wait=30
-
-    while [ $waited -lt $max_wait ]; do
-        if curl -fsS "${GITEA_LOCAL_URL}/api/healthz" >/dev/null 2>&1; then
-            return 0
-        fi
-
-        if ! kill -0 "$pf_pid" 2>/dev/null; then
-            echo "  ERROR: Gitea port-forward exited before the API became reachable"
-            print_gitea_port_forward_log
-            exit 1
-        fi
-
-        sleep 1
-        waited=$((waited + 1))
-    done
-
-    echo "  ERROR: Gitea API did not become reachable at ${GITEA_LOCAL_URL} after ${max_wait}s"
-    print_gitea_port_forward_log
-    exit 1
 }
 
 get_k3s_node_internal_ip() {
@@ -212,7 +197,7 @@ set_argocd_admin_password() {
     password_mtime=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
     kubectl -n argocd patch secret argocd-secret --type=merge \
-        --patch "{\"stringData\":{\"admin.password\":\"${ARGOCD_ADMIN_PASSWORD_HASH}\",\"admin.passwordMtime\":\"${password_mtime}\"}}" >/dev/null
+        --patch "{\"stringData\":{\"admin.password\":\"${ARGOCD_ADMIN_PASSWORD_HASH}\",\"admin.passwordMtime\":\"${password_mtime}\",\"accounts.learner.password\":\"${ARGOCD_ADMIN_PASSWORD_HASH}\",\"accounts.learner.passwordMtime\":\"${password_mtime}\"}}" >/dev/null
     kubectl -n argocd delete secret argocd-initial-admin-secret --ignore-not-found=true >/dev/null
     kubectl -n argocd rollout restart deployment/argocd-server >/dev/null
     kubectl -n argocd rollout status deployment/argocd-server --timeout=300s >/dev/null
@@ -282,80 +267,49 @@ OS=$(uname -s)
 
 if [[ "$OS" == "Darwin" ]]; then
     echo "Step 1: Setting up Colima with k3s..."
+    COLIMA_PROFILE="${COLIMA_PROFILE:-argo-remotelab}"
+    if [[ ! "$COLIMA_PROFILE" =~ ^[a-z][a-z0-9-]*$ ]]; then
+        echo "  ERROR: COLIMA_PROFILE must contain lowercase letters, numbers, and hyphens" >&2
+        exit 1
+    fi
 
     if ! command -v colima &>/dev/null; then
         echo "  ERROR: Colima is not installed. Install with: brew install colima"
         exit 1
     fi
 
-    # Check current Colima state and configuration
-    COLIMA_ACTION="create"  # create | start | none
-    COLIMA_JSON=$(colima list --json 2>/dev/null || echo "")
-
-    if [[ -n "$COLIMA_JSON" ]] && echo "$COLIMA_JSON" | grep -q '"name"'; then
-        COLIMA_RUNTIME=$(echo "$COLIMA_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('runtime',''))" 2>/dev/null)
-        COLIMA_STATUS=$(echo "$COLIMA_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status',''))" 2>/dev/null)
-
-        if [[ "$COLIMA_RUNTIME" == "containerd+k3s" ]]; then
-            if [[ "$COLIMA_STATUS" == "Running" ]]; then
-                # Colima is running, but verify k3s is actually healthy
-                if kubectl cluster-info &>/dev/null; then
-                    COLIMA_ACTION="none"
-                    echo "  Colima already running with correct config (containerd+k3s)"
-                else
-                    echo "  Colima is running but k3s is not responding, restarting..."
-                    COLIMA_ACTION="restart"
-                fi
-            else
-                COLIMA_ACTION="start"
-                echo "  Colima stopped but has correct config, starting..."
-            fi
-        else
-            # Wrong configuration (docker, containerd without k3s, etc.)
-            echo "  Colima has wrong configuration: runtime=$COLIMA_RUNTIME"
-            echo "  Required: containerd+k3s (--kubernetes --runtime containerd)"
-            echo "  Deleting and recreating with correct settings..."
-            colima stop --force 2>/dev/null || true
-            colima delete --force 2>/dev/null || true
-            COLIMA_ACTION="create"
-        fi
-    fi
-
-    case "$COLIMA_ACTION" in
-        create)
-            colima delete --force 2>/dev/null || true
-            echo "  Starting Colima with Kubernetes + containerd..."
-            colima start --kubernetes --runtime containerd --cpu 4 --memory 6 --disk 60
-            sleep 15
-            ;;
-        restart)
-            colima restart
-            sleep 15
-            # If k3s still isn't responding after restart, the kubeconfig may be
-            # stale (port changed) or k3s state may be corrupted. Reset k3s entirely.
-            if ! kubectl cluster-info &>/dev/null; then
-                echo "  k3s still not responding after restart, resetting Kubernetes..."
-                colima kubernetes reset
-                sleep 10
-            fi
-            ;;
-        start)
-            colima start
-            sleep 15
-            ;;
-        none)
-            ;;
-    esac
-    echo "  OK: Colima running"
-
-    # Switch kubectl context
-    COLIMA_CONTEXT=$(kubectl config get-contexts -o name 2>/dev/null | grep -i "colima" | head -n 1)
-    if [ -z "$COLIMA_CONTEXT" ]; then
-        echo "  ERROR: No colima kubectl context found. Try: colima kubernetes reset"
+    if ! COLIMA_JSON=$(env -u COLIMA_PROFILE colima list --json 2>/dev/null); then
+        echo "  ERROR: Could not list Colima profiles" >&2
         exit 1
     fi
-    kubectl config use-context "$COLIMA_CONTEXT" > /dev/null
-    echo "  OK: Using context $COLIMA_CONTEXT"
+    COLIMA_STATUS=$(printf '%s\n' "$COLIMA_JSON" | python3 -c '
+import json, sys
+profile = sys.argv[1]
+for line in sys.stdin:
+    item = json.loads(line)
+    if item.get("name") == profile:
+        print(item.get("status", ""))
+        break
+' "$COLIMA_PROFILE")
+    case "$COLIMA_STATUS" in
+        Running) ;;
+        Stopped) colima start --profile "$COLIMA_PROFILE" --activate=false --cpu 4 ;;
+        "")
+            echo "  Starting isolated Colima profile ${COLIMA_PROFILE}..."
+            colima start --profile "$COLIMA_PROFILE" --activate=false \
+                --kubernetes --runtime containerd --cpu 4 --memory 8 --disk 60
+            ;;
+        *)
+            echo "  ERROR: Colima profile ${COLIMA_PROFILE} is ${COLIMA_STATUS}; repair it before deployment" >&2
+            exit 1
+            ;;
+    esac
+    switch_to_local_context || {
+        echo "  ERROR: Profile ${COLIMA_PROFILE} needs a healthy Kubernetes cluster" >&2
+        exit 1
+    }
+    trap 'rm -f "${LAB_KUBECONFIG:-}"' EXIT
+    echo "  OK: Using Colima profile ${COLIMA_PROFILE}"
 else
     echo "Step 1: Verifying k3s..."
     if ! kubectl cluster-info &>/dev/null; then
@@ -377,7 +331,7 @@ echo ""
 # --- Cleanup ---
 if [ "$SKIP_CLEANUP" = false ]; then
     echo "Step 2: Cleaning up existing resources..."
-    for ns in applications argocd; do
+    for ns in applications shop-staging argocd; do
         if kubectl get namespace "$ns" &>/dev/null; then
             echo "  Removing namespace: $ns"
             # Remove ArgoCD finalizers from Applications and Jobs
@@ -392,7 +346,7 @@ if [ "$SKIP_CLEANUP" = false ]; then
         fi
     done
     # Wait for deletion
-    for ns in applications argocd; do
+    for ns in applications shop-staging argocd; do
         waited=0
         while kubectl get namespace "$ns" &>/dev/null && [ $waited -lt 90 ]; do
             # Clear any remaining finalizers blocking deletion
@@ -430,6 +384,7 @@ echo "Step 5: Configuring ArgoCD (ingress, subpath)..."
 
 # Apply ArgoCD customizations (non-SOPS parts first)
 kubectl apply -f "$REPO_DIR/manifests/gitops/argocd-cmd-params-cm.yaml"
+kubectl apply -f "$REPO_DIR/manifests/gitops/argocd-learner-rbac.yaml"
 kubectl apply -f "$REPO_DIR/manifests/gitops/argocd-ingress.yaml"
 
 # Patch ArgoCD server for subpath
@@ -531,7 +486,6 @@ echo ""
 # --- Create Gitea user ---
 echo "Step 9: Creating Gitea admin user..."
 kubectl delete job gitea-init-user -n applications --ignore-not-found=true 2>/dev/null || true
-sleep 2
 kubectl apply -f "$REPO_DIR/manifests/applications/gitea-init-user.yaml"
 kubectl wait --for=condition=complete --timeout=180s job/gitea-init-user -n applications 2>/dev/null || {
     echo "  WARNING: User creation may have had issues, continuing..."
@@ -550,90 +504,10 @@ if ! command -v sops &>/dev/null; then
     exit 1
 fi
 
-# Port-forward to Gitea for direct git access. Kept alive past script exit
-# so the user can clone/push against http://localhost:3000 without restarting it.
-# cleanup-all.sh removes it; re-running deploy-all.sh replaces it.
-stop_gitea_port_forward
-rm -f "$GITEA_PORT_FORWARD_LOG"
-nohup kubectl port-forward svc/gitea -n applications 3000:3000 \
-    >"$GITEA_PORT_FORWARD_LOG" 2>&1 &
-PF_PID=$!
-disown "$PF_PID"
-wait_for_gitea_port_forward "$PF_PID"
+bash "$SCRIPT_DIR/host-port-forwards.sh" start gitea
 echo "  OK: Gitea API reachable at ${GITEA_LOCAL_URL}"
 
-# Create repo via API
-REPO_CHECK=$(curl -sS -o /dev/null -w "%{http_code}" \
-    -u "remotelab:remotelab" \
-    "${GITEA_LOCAL_URL}/api/v1/repos/remotelab/django-app" || true)
-
-if [[ "$REPO_CHECK" != "200" && "$REPO_CHECK" != "404" ]]; then
-    echo "  ERROR: Could not query Django app repo in Gitea (HTTP ${REPO_CHECK:-unknown})"
-    print_gitea_port_forward_log
-    exit 1
-fi
-
-if [ "$REPO_CHECK" = "200" ]; then
-    if ! curl -fsS -X DELETE "${GITEA_LOCAL_URL}/api/v1/repos/remotelab/django-app" \
-        -u "remotelab:remotelab" > /dev/null; then
-        echo "  ERROR: Failed to delete existing Django app repo in Gitea"
-        exit 1
-    fi
-    sleep 2
-fi
-
-if ! curl -fsS -X POST "${GITEA_LOCAL_URL}/api/v1/user/repos" \
-    -H "Content-Type: application/json" \
-    -u "remotelab:remotelab" \
-    -d '{"name":"django-app","description":"Django app with Helm chart and SOPS secrets","private":false,"auto_init":true,"default_branch":"main"}' > /dev/null; then
-    echo "  ERROR: Failed to create Django app repo in Gitea"
-    exit 1
-fi
-sleep 3
-
-# Prepare local chart for push
-WORK_DIR=$(mktemp -d)
-cd "$WORK_DIR"
-git init -q
-git config user.email "remotelab@localhost"
-git config user.name "Remotelab"
-
-# Copy the Helm chart from local repo
-cp -r "$REPO_DIR/sample-django-app/chart" .
-
-# Create .sops.yaml
-cat > chart/django-app/.sops.yaml <<SOPSEOF
-creation_rules:
-  - path_regex: '.*\.enc$'
-    age: '$AGE_PUBLIC_KEY'
-SOPSEOF
-
-# Create and encrypt secrets
-cat > /tmp/remotelab-secrets-plain.yaml <<SECRETSEOF
-secrets:
-  DB_PASSWORD: "remotelab"
-  SECRET_KEY: "django-production-secret-key-argo-remotelab-2024"
-  API_TOKEN: "tok_prod_abc123def456"
-SECRETSEOF
-
-export SOPS_AGE_KEY_FILE="$REPO_DIR/secrets/keys/local.key"
-sops encrypt --age "$AGE_PUBLIC_KEY" --input-type yaml --output-type yaml \
-    /tmp/remotelab-secrets-plain.yaml > chart/django-app/secrets.yaml.enc
-rm -f /tmp/remotelab-secrets-plain.yaml
-
-# Remove any stray packaged chart
-rm -f chart/django-app-*.tgz
-
-git add -A
-git commit -q -m "Initial commit: Django app with Helm chart and SOPS secrets"
-git remote add origin "http://remotelab:remotelab@localhost:3000/remotelab/django-app.git"
-git push -f -u origin main -q 2>/dev/null
-
-# Cleanup
-cd "$REPO_DIR"
-rm -rf "$WORK_DIR"
-
-echo "  OK: Repository initialized with local Helm chart + SOPS secrets"
+bash "$REPO_DIR/scripts/reset-gitea-repo.sh" "$GITEA_LOCAL_URL" "$AGE_PUBLIC_KEY"
 echo ""
 
 # --- Create ArgoCD repo secret ---
@@ -657,7 +531,10 @@ echo ""
 
 # --- Deploy ArgoCD Application ---
 echo "Step 12: Deploying ArgoCD Application..."
+kubectl apply -f "$REPO_DIR/argocd-apps/projects.yaml"
 kubectl apply -f "$REPO_DIR/argocd-apps/django-app.yaml"
+kubectl apply -f "$REPO_DIR/argocd-apps/platform-apps.yaml"
+bash "$REPO_DIR/scripts/configure-gitea-webhook.sh" "$GITEA_LOCAL_URL"
 echo "  OK: ArgoCD Application created"
 echo ""
 
@@ -680,15 +557,16 @@ done
 
 if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
     echo "  WARNING: Django not ready after ${MAX_WAIT}s"
-    echo "  Check: kubectl get applications -n argocd django-app"
+    echo "  Check: kubectl get applications -n argocd shop-web-prod shop-web-staging"
     echo "  Check: kubectl get pods -n applications"
 fi
 echo ""
+bash "$REPO_DIR/scripts/seed-history.sh" "$GITEA_LOCAL_URL"
 
 # --- Build Scenario Controller Image ---
 echo "Step 14: Building Scenario Controller image..."
 if [[ "$OS" == "Darwin" ]]; then
-    colima nerdctl -- build -t "$SCENARIO_CONTROLLER_IMAGE" \
+    colima --profile "$COLIMA_PROFILE" nerdctl -- build -t "$SCENARIO_CONTROLLER_IMAGE" \
         --namespace k8s.io "$REPO_DIR/scenario-controller" 2>&1 | tail -3
 else
     # On Linux with k3s, use ctr to import
@@ -710,8 +588,39 @@ kubectl apply -f "$REPO_DIR/manifests/applications/scenario-controller.yaml"
 kubectl set image deployment/scenario-controller -n applications controller="$SCENARIO_CONTROLLER_IMAGE" >/dev/null
 kubectl rollout restart deployment/scenario-controller -n applications >/dev/null
 kubectl rollout status deployment/scenario-controller -n applications --timeout=180s
-echo "  OK: Scenario controller deployed with the latest local image (will start injecting failures after app is healthy)"
+echo "  OK: Scenario controller run API deployed; the launcher starts incidents"
 echo ""
+
+echo "Step 16: Building the learning UI services..."
+for component in learning-service lab-gateway lab-terminal; do
+    case "$component" in
+        learning-service) image="$LEARNING_SERVICE_IMAGE" ;;
+        lab-gateway) image="$LAB_GATEWAY_IMAGE" ;;
+        lab-terminal) image="$LAB_TERMINAL_IMAGE" ;;
+    esac
+    if [[ "$OS" == "Darwin" ]]; then
+        colima --profile "$COLIMA_PROFILE" nerdctl -- build -f "$REPO_DIR/$component/Dockerfile" -t "$image" \
+            --namespace k8s.io "$REPO_DIR"
+    elif command -v nerdctl &>/dev/null; then
+        nerdctl build -f "$REPO_DIR/$component/Dockerfile" -t "$image" \
+            --namespace k8s.io "$REPO_DIR"
+    else
+        docker build -f "$REPO_DIR/$component/Dockerfile" -t "$image" "$REPO_DIR"
+        docker save "$image" | sudo k3s ctr images import -
+    fi
+done
+
+kubectl apply -f "$REPO_DIR/manifests/applications/learning-service.yaml"
+kubectl set image deployment/learning-service -n applications learning-service="$LEARNING_SERVICE_IMAGE" >/dev/null
+kubectl rollout status deployment/learning-service -n applications --timeout=180s
+kubectl apply -f "$REPO_DIR/manifests/applications/lab-terminal.yaml"
+kubectl set image deployment/lab-terminal -n applications terminal="$LAB_TERMINAL_IMAGE" >/dev/null
+kubectl rollout status deployment/lab-terminal -n applications --timeout=180s
+kubectl apply -f "$REPO_DIR/manifests/applications/lab-gateway.yaml"
+kubectl set image deployment/lab-gateway -n applications gateway="$LAB_GATEWAY_IMAGE" >/dev/null
+kubectl rollout status deployment/lab-gateway -n applications --timeout=180s
+bash "$REPO_DIR/scripts/record-deploy-state.sh" "$IMAGE_TAG"
+bash "$SCRIPT_DIR/host-port-forwards.sh" start traefik
 
 # --- Done ---
 echo "========================================"
@@ -719,25 +628,25 @@ echo "  GitOps Failure Lab - Ready!"
 echo "========================================"
 echo ""
 echo "Access:"
-echo "  ArgoCD:     https://localhost/argocd"
-echo "  Django:     https://localhost/django/api/health/"
+echo "  Lab:        https://localhost:8443/"
+echo "  ArgoCD:     https://localhost:8443/argocd"
+echo "  Django:     https://localhost:8443/django/api/health/"
 echo ""
 echo "Credentials:"
-echo "  ArgoCD:  admin / ${ARGOCD_ADMIN_PASSWORD}"
+echo "  ArgoCD:  learner / ${ARGOCD_ADMIN_PASSWORD} (launched sessions)"
+echo "  ArgoCD:  admin / ${ARGOCD_ADMIN_PASSWORD} (manual access)"
 echo ""
 echo "SOPS Key: secrets/keys/local.key"
 echo ""
 echo "How it works:"
-echo "  1. ArgoCD manages the Django app from Gitea (git source for Helm chart)"
-echo "  2. The scenario controller watches ArgoCD health status"
-echo "  3. When healthy, it randomly injects a failure (bad SOPS, missing ConfigMap, etc.)"
-echo "  4. You troubleshoot using ArgoCD UI and kubectl"
-echo "  5. Once you fix it, the controller logs an explanation and waits before the next failure"
+echo "  1. Open the launcher and choose a scenario, mode, and environment"
+echo "  2. The controller resets to baseline and injects that scenario"
+echo "  3. The coach guides console evidence checks and accepts a Gitea or terminal fix"
+echo "  4. Verify Healthy and Synced in ArgoCD, then submit the incident note"
 echo ""
 echo "Fix scenarios by cloning the lab repo, editing, and pushing:"
 echo "  git clone http://remotelab:remotelab@localhost:3000/remotelab/django-app.git"
 echo "  # for SOPS-encrypted files: export SOPS_AGE_KEY_FILE=${REPO_DIR}/secrets/keys/local.key"
-echo "  (Gitea is reachable at http://localhost:3000 via a persistent port-forward; cleanup-all.sh removes it.)"
 echo ""
 echo "Useful commands:"
 echo "  kubectl get applications -n argocd"

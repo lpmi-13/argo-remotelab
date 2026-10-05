@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "levels": [
+    {"level": 1, "title": "Console orientation"},
+    {"level": 2, "title": "Read the tree, fix in git"},
+    {"level": 3, "title": "Operations in the console"},
+    {"level": 4, "title": "When rendering fails"},
+    {"level": 5, "title": "Multi-environment incidents"}
+  ],
+  "scenarios": [
+    "console-orientation", "console-resources", "console-history",
+    "missing-configmap", "stuck-sync", "stale-job",
+    "orphaned-resource", "sops-decrypt-failure", "sops-global-mac-mismatch",
+    "hmac-mismatch", "wrong-type-sops", "env-drift", "repo-auth"
+  ]
+}

@@ -1,14 +1,15 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: django-app
+  name: shop-web-prod
   namespace: argocd
+  labels:
+    env: prod
+    team: shop
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: default
-
-  # Single source: Helm chart from git repository
+  project: shop
   source:
     repoURL: http://gitea.applications.svc.cluster.local:3000/remotelab/django-app.git
     targetRevision: main
@@ -16,22 +17,43 @@ spec:
     helm:
       valueFiles:
       - values.yaml
-      # SOPS-encrypted secrets decrypted by helm-secrets plugin
       - secrets+age-import:///sops-age-key/key.txt?secrets.yaml.enc
-
   destination:
     server: https://kubernetes.default.svc
     namespace: applications
-
   syncPolicy:
     automated:
       prune: false
       selfHeal: true
     syncOptions:
     - CreateNamespace=true
-
-  ignoreDifferences:
-  - group: apps
-    kind: Deployment
-    jsonPointers:
-    - /spec/replicas
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: shop-web-staging
+  namespace: argocd
+  labels:
+    env: staging
+    team: shop
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: shop
+  source:
+    repoURL: http://gitea.applications.svc.cluster.local:3000/remotelab/django-app.git
+    targetRevision: main
+    path: chart/django-app-staging
+    helm:
+      valueFiles:
+      - values.yaml
+      - secrets+age-import:///sops-age-key/key.txt?secrets.yaml.enc
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: shop-staging
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true

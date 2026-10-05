@@ -16,6 +16,9 @@ push_rootfs_image="${PUSH_ROOTFS_IMAGE:-${PUSH_IMAGE:-${push_images}}}"
 scenario_controller_image="${SCENARIO_CONTROLLER_IMAGE_REPO}:${app_image_tag}"
 argocd_tools_image="${ARGOCD_TOOLS_IMAGE_REPO}:${app_image_tag}"
 django_image="${DJANGO_IMAGE_REPO}:${app_image_tag}"
+learning_service_image="${LEARNING_SERVICE_IMAGE_REPO}:${app_image_tag}"
+lab_gateway_image="${LAB_GATEWAY_IMAGE_REPO}:${app_image_tag}"
+lab_terminal_image="${LAB_TERMINAL_IMAGE_REPO}:${app_image_tag}"
 
 runtime_images=(
   "${POSTGRES_IMAGE}"
@@ -28,6 +31,9 @@ first_party_images=(
   "${scenario_controller_image}"
   "${argocd_tools_image}"
   "${django_image}"
+  "${learning_service_image}"
+  "${lab_gateway_image}"
+  "${lab_terminal_image}"
 )
 
 ensure_image() {
@@ -100,6 +106,15 @@ if [[ "${build_images}" != "0" ]]; then
 
   echo "Building ${django_image}..."
   docker build -t "${django_image}" "${repo_root}/sample-django-app"
+
+  echo "Building ${learning_service_image}..."
+  docker build -f "${repo_root}/learning-service/Dockerfile" -t "${learning_service_image}" "${repo_root}"
+
+  echo "Building ${lab_gateway_image}..."
+  docker build -f "${repo_root}/lab-gateway/Dockerfile" -t "${lab_gateway_image}" "${repo_root}"
+
+  echo "Building ${lab_terminal_image}..."
+  docker build -f "${repo_root}/lab-terminal/Dockerfile" -t "${lab_terminal_image}" "${repo_root}"
 fi
 
 if [[ "${pull_runtime_images}" != "0" ]]; then
@@ -133,6 +148,7 @@ copy_dir "${repo_root}/argocd-apps" "${build_context}"
 copy_dir "${repo_root}/manifests" "${build_context}"
 copy_dir "${repo_root}/playground" "${build_context}"
 copy_dir "${repo_root}/sample-django-app/chart" "${build_context}/sample-django-app"
+copy_dir "${repo_root}/sample-django-app/platform" "${build_context}/sample-django-app"
 copy_dir "${repo_root}/scripts" "${build_context}"
 
 echo "Syncing copied manifests to image tag ${app_image_tag}..."

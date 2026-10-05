@@ -1,0 +1,12 @@
+{
+  "id": "console-history", "title": "Read the release history", "level": 1,
+  "brief": "Find the shop Application for the named environment. Read its latest deployed revision in History and the result of its last sync operation.",
+  "fix_surface": "none", "fix_paths": [],
+  "targets": ["apps.list", "app.header", "app.history", "app.operation", "app.diff"],
+  "checks": [
+    {"id": "deployed-revision", "target": "app.history", "question": "Which Git revision was deployed most recently?", "answer": "${revision}", "hint": "Open History and Rollback and read the latest revision.", "why": "History links the deployment to a Git commit."},
+    {"id": "last-operation", "target": "app.operation", "question": "What phase did the latest sync operation reach?", "answer": "Succeeded", "hint": "Open Sync Status and read the operation phase.", "why": "The operation panel tells you whether the last apply completed."}
+  ],
+  "truth": {"resource": "${application}", "cause": "No incident", "fix": "No fix needed"},
+  "habits": []
+}
