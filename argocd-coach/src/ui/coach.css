@@ -9,6 +9,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
   max-height: calc(100vh - 92px); overflow: auto; background: var(--coach-surface); color: var(--coach-text);
   border: 1px solid var(--coach-border); border-radius: 14px;
   box-shadow: var(--coach-shadow); }
+.panel[data-doing] { border-left: 5px solid var(--coach-doing-accent); }
 :host([data-native-overlay]) .panel { left: 20px; right: auto; }
 .panel[data-collapsed] { width: auto; max-height: none; overflow: visible; }
 .panel[data-collapsed] .panel-controls { padding-bottom: 9px; }
@@ -41,6 +42,10 @@ p { color: var(--coach-text); }
 .demo-explanation span { color: var(--coach-accent-text); font-size: 11px; font-weight: 750;
   letter-spacing: .04em; text-transform: uppercase; padding-top: 3px; }
 .demo-explanation p { margin: 0; font-size: 15px; line-height: 1.4; overflow-wrap: anywhere; }
+.panel[data-doing] .demo-step { padding: 10px 12px; border-left: 4px solid var(--coach-doing-accent);
+  border-radius: 6px; background: var(--coach-doing-surface); }
+.panel[data-doing] .driving, .panel[data-doing] .step-count,
+.panel[data-doing] .demo-explanation > div:first-child span { color: var(--coach-doing-text); }
 .demo-timer { margin-top: 16px; color: var(--coach-muted); font-size: 12px; }
 .demo-timer[hidden] { display: none; }
 .demo-timer-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -49,7 +54,6 @@ p { color: var(--coach-text); }
 .demo-timer strong { color: var(--coach-text); font-variant-numeric: tabular-nums; }
 .demo-timer-track { height: 7px; margin-top: 7px; overflow: hidden; border-radius: 6px; background: var(--coach-border); }
 .demo-timer-track span { display: block; width: 0; height: 100%; border-radius: inherit; background: var(--coach-accent); }
-.demo-timer.working .demo-timer-track span { width: 35% !important; animation: demo-working 1.25s cubic-bezier(.55, 0, .45, 1) infinite; }
 @keyframes demo-working { from { transform: translateX(-110%); } to { transform: translateX(290%); } }
 .learning-card .step-eyebrow { color: var(--coach-healthy-text); }
 .form-row { margin: 10px 0; }
@@ -148,4 +152,4 @@ code { font-family: var(--coach-mono); background: var(--coach-page); padding: 1
   .brief-header, .brief-body, .brief-footer, .brief-progress, .brief-waiting { padding-left: 16px; padding-right: 16px; }
   .brief-body h2 { font-size: 22px; }
 }
-@media (prefers-reduced-motion: reduce) { .spotlight, .coach-pointer { transition: none; } .coach-pointer[data-click] svg { animation: none; } .demo-timer.working .demo-timer-track span, .brief-progress.working .brief-progress-track span { animation: none; width: 100% !important; opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .spotlight, .coach-pointer { transition: none; } .coach-pointer[data-click] svg { animation: none; } .brief-progress.working .brief-progress-track span { animation: none; width: 100% !important; opacity: .55; } }

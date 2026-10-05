@@ -296,4 +296,6 @@ bash "$script_dir/record-deploy-state.sh" "$image_tag"
 bash "$script_dir/host-port-forwards.sh" start gitea
 bash "$script_dir/host-port-forwards.sh" start traefik
 
-echo "Warm deployment ready in $((SECONDS - started_at))s: https://localhost:8443/"
+echo "Warm deployment ready in $((SECONDS - started_at))s"
+echo ""
+echo "Start here: https://localhost:8443/"

@@ -25,6 +25,8 @@ test('light coach text, status and buttons meet WCAG AA', () => {
     assert.ok(ratio(light[token], light['--coach-surface']) >= 4.5, token);
   }
   assert.ok(ratio(light['--coach-button-text'], light['--coach-accent']) >= 4.5);
+  assert.ok(ratio(light['--coach-doing-text'], light['--coach-doing-surface']) >= 4.5);
+  assert.ok(ratio(light['--coach-text'], light['--coach-doing-surface']) >= 4.5);
 });
 
 test('dark coach text, status and buttons meet WCAG AA', () => {
@@ -33,6 +35,8 @@ test('dark coach text, status and buttons meet WCAG AA', () => {
     assert.ok(ratio(dark[token], dark['--coach-surface']) >= 4.5, token);
   }
   assert.ok(ratio(dark['--coach-button-text'], dark['--coach-accent']) >= 4.5);
+  assert.ok(ratio(dark['--coach-doing-text'], dark['--coach-doing-surface']) >= 4.5);
+  assert.ok(ratio(dark['--coach-text'], dark['--coach-doing-surface']) >= 4.5);
 });
 
 test('health colors match Argo CD 3.5.3 UI palette', () => {

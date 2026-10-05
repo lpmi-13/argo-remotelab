@@ -29,10 +29,10 @@ function session(mode) {
   };
 }
 
-async function fixture(mode, history = false, applicationCard = false) {
+async function fixture(mode, history = false, applicationCard = false, fixSurface = 'none') {
   const browser = await chromium.launch({headless: true});
   const page = await browser.newPage({viewport: {width: 1200, height: 750}});
-  let view = session(mode);
+  let view = {...session(mode), fix_surface: fixSurface};
   if (applicationCard) view = {...view,
     scenario: {id: 'console-orientation', title: 'Find the deployed revision', level: 1},
     checks_total: 3,
@@ -43,6 +43,7 @@ async function fixture(mode, history = false, applicationCard = false) {
       demonstration_answer: 'shop-web-prod', available: true},
   };
   let sessionFailure = null;
+  const actions = [];
   await page.addInitScript(({applicationCard}) => {
     if (location.pathname.startsWith('/argocd/') && !sessionStorage.getItem('argo-coach:handoff')) {
       sessionStorage.setItem('argo-coach:handoff', JSON.stringify({session: 'session-1', token: 'test-token'}));
@@ -90,9 +91,10 @@ async function fixture(mode, history = false, applicationCard = false) {
     if (url.pathname.startsWith('/coach/assets/ui/')) return route.fulfill({contentType: 'text/css',
       body: styles.get(url.pathname.split('/').at(-1)) || ''});
     if (url.pathname === '/terminal/') return route.fulfill({contentType: 'text/html', body: '<p>Persistent shell</p>'});
-    if (url.pathname === '/coach/learning/api/sessions/session-1/actions' && applicationCard) {
+    if (url.pathname === '/coach/learning/api/sessions/session-1/actions') {
       const action = route.request().postDataJSON();
-      if (action.type === 'target_visited' && action.details.target === 'app.header') {
+      actions.push(action);
+      if (applicationCard && action.type === 'target_visited' && action.details.target === 'app.header') {
         view = {...view, checks_passed: 1, next_check: {
           id: 'health', target: 'app.header', where: 'Application header',
           action: 'Read Health.', reason: 'The header shows current health.',
@@ -112,7 +114,7 @@ async function fixture(mode, history = false, applicationCard = false) {
   });
   await page.goto('http://lab.test/argocd/applications');
   await page.locator('#argocd-coach-host .incident-briefing').waitFor();
-  return {browser, page, setView(next) { view = next; },
+  return {browser, page, actions, setView(next) { view = next; },
     setSessionFailure(status, error) { sessionFailure = {status, error}; }};
 }
 
@@ -158,6 +160,14 @@ test('first demo step clicks the Application after one countdown', {timeout: 300
         assert.equal(new URL(page.url()).pathname, '/argocd/applications');
         await page.clock.runFor(100);
       }
+      const acting = page.locator('#argocd-coach-host .panel[data-doing]');
+      await acting.waitFor();
+      assert.equal(await acting.locator('.demo-explanation span').first().textContent(), 'Doing');
+      assert.equal(await acting.locator('[data-demo-timer]').isVisible(), false);
+      assert.equal(await acting.locator('.demo-step').evaluate(element =>
+        getComputedStyle(element).borderLeftColor), 'rgb(224, 162, 0)');
+      await page.clock.runFor(100);
+      await page.locator('#argocd-coach-host .coach-pointer[data-visible]').waitFor();
       await page.clock.runFor(2200);
       await page.waitForURL('**/argocd/applications/argocd/shop-web-prod');
       await page.locator('#app-detail').waitFor();
@@ -170,7 +180,7 @@ test('first demo step clicks the Application after one countdown', {timeout: 300
   }
 });
 
-test('demo action and narration beats wait 15 seconds before the cursor moves', {timeout: 45000}, async () => {
+test('demo action starts cursor movement without a Doing countdown', {timeout: 45000}, async () => {
   const {browser, page} = await fixture('demonstration', true);
   try {
     assert.equal(await page.locator('#argocd-coach-host .panel').count(), 0);
@@ -199,15 +209,10 @@ test('demo action and narration beats wait 15 seconds before the cursor moves', 
     assert.equal(await page.locator('#argocd-coach-host [data-action="argocd"]').count(), 0);
     await page.clock.runFor(15000);
     assert.deepEqual(await panel.locator('.demo-explanation span').allTextContents(), ['Doing', 'Why']);
-    assert.ok(Number(await page.locator('#argocd-coach-host [data-demo-seconds]').innerText()) >= 14.5);
-    await page.clock.runFor(15000);
-    for (let attempt = 0; attempt < 12 &&
-         (await panel.locator('.demo-explanation span').first().textContent()) !== 'Found'; attempt += 1) {
-      await page.clock.runFor(500);
-    }
-    assert.deepEqual(await panel.locator('.demo-explanation span').allTextContents(), ['Found', 'Why']);
-    assert.deepEqual(await panel.locator('.demo-explanation p').allTextContents(),
-      ['abc1234', 'History records the Git commit Argo actually deployed.']);
+    assert.equal(await panel.getAttribute('data-doing'), '');
+    assert.equal(await panel.locator('[data-demo-timer]').isVisible(), false);
+    assert.equal(await panel.locator('.demo-step').evaluate(element =>
+      getComputedStyle(element).borderLeftColor), 'rgb(224, 162, 0)');
     for (let attempt = 0; attempt < 12 &&
          !await page.locator('#argocd-coach-host .coach-pointer[data-visible]').isVisible(); attempt += 1) {
       await page.clock.runFor(500);
@@ -231,11 +236,20 @@ test('demo action and narration beats wait 15 seconds before the cursor moves', 
     assert.ok(geometry.targetTop >= geometry.drawerTop && geometry.targetBottom <= geometry.drawerBottom, JSON.stringify(geometry));
     assert.ok(geometry.targetTop >= 0 && geometry.targetBottom <= 750, JSON.stringify(geometry));
     assert.ok(Math.abs(geometry.pointerTop - geometry.targetTop) < 40, JSON.stringify(geometry));
+    for (let attempt = 0; attempt < 12 &&
+         (await panel.locator('.demo-explanation span').first().textContent()) !== 'Found'; attempt += 1) {
+      await page.clock.runFor(500);
+    }
+    assert.deepEqual(await panel.locator('.demo-explanation span').allTextContents(), ['Found', 'Why']);
+    assert.deepEqual(await panel.locator('.demo-explanation p').allTextContents(),
+      ['abc1234', 'History records the Git commit Argo actually deployed.']);
+    assert.equal(await panel.getAttribute('data-doing'), null);
+    assert.ok(Number(await page.locator('#argocd-coach-host [data-demo-seconds]').innerText()) >= 14.5);
   } finally { await browser.close(); }
 });
 
-test('Advance completes only the current demo countdown', {timeout: 15000}, async () => {
-  const {browser, page} = await fixture('demonstration');
+test('Advance skips reading beats while Doing has no timer', {timeout: 15000}, async () => {
+  const {browser, page, actions} = await fixture('demonstration', true);
   try {
     await page.clock.install();
     await page.locator('#argocd-coach-host [data-action="begin"]').click();
@@ -243,17 +257,19 @@ test('Advance completes only the current demo countdown', {timeout: 15000}, asyn
     await advance.click();
     const phase = page.locator('#argocd-coach-host .demo-explanation span').first();
     assert.equal(await phase.textContent(), 'Doing');
-    assert.equal(await page.evaluate(() => document.querySelector('#argocd-coach-host').shadowRoot.activeElement?.id),
-      'demo-advance');
-    assert.ok(Number(await page.locator('#argocd-coach-host [data-demo-seconds]').innerText()) >= 14.5);
-    await page.clock.runFor(14900);
-    assert.equal(await phase.textContent(), 'Doing');
-    await advance.click();
+    assert.equal(await page.locator('#argocd-coach-host [data-demo-timer]').isVisible(), false);
+    assert.equal(await advance.isVisible(), false);
+    for (let attempt = 0; attempt < 12 && await phase.textContent() !== 'Found'; attempt += 1) {
+      await page.clock.runFor(500);
+    }
     assert.equal(await phase.textContent(), 'Found');
     assert.ok(Number(await page.locator('#argocd-coach-host [data-demo-seconds]').innerText()) >= 14.5);
+    const answered = page.waitForResponse(response => response.url().endsWith('/actions') &&
+      response.request().postDataJSON()?.type === 'evidence_check_answered');
+    await advance.click();
+    await answered;
+    assert.ok(actions.some(action => action.type === 'evidence_check_answered'));
     await page.locator('#argocd-coach-host [data-action="stop"]').click();
-    await page.clock.runFor(16000);
-    assert.equal(await phase.textContent(), 'Found', 'Stop cancels the pending action');
     assert.equal(await advance.isVisible(), false);
   } finally { await browser.close(); }
 });
@@ -402,8 +418,34 @@ test('failed preparation stays on the loading page and offers a return to missio
   } finally { await browser.close(); }
 });
 
-test('terminal minimizes without remounting, resizes, and debrief is centered', {timeout: 15000}, async () => {
+test('terminal button follows the mission repair surface and mode', {timeout: 30000}, async () => {
   const fixturePage = await fixture('guided');
+  const {browser, page} = fixturePage;
+  try {
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    const cases = [
+      ['guided', 'none', false],
+      ['guided', 'argo', false],
+      ['guided', 'git', true],
+      ['guided', 'argo-and-git', true],
+      ['guided', 'terminal', true],
+      ['challenge', 'argo', false],
+      ['challenge', 'git', true],
+      ['demonstration', 'git', false],
+      ['demonstration', 'terminal', false],
+    ];
+    for (const [mode, fixSurface, expected] of cases) {
+      fixturePage.setView({...session(mode), fix_surface: fixSurface});
+      await page.reload();
+      await page.locator('#argocd-coach-host .panel').waitFor();
+      assert.equal(await page.locator('#argocd-coach-host [data-action="terminal"]').count(),
+        Number(expected), `${mode} / ${fixSurface}`);
+    }
+  } finally { await browser.close(); }
+});
+
+test('terminal minimizes without remounting, resizes, and debrief is centered', {timeout: 15000}, async () => {
+  const fixturePage = await fixture('guided', false, false, 'git');
   const {browser, page} = fixturePage;
   try {
     await page.locator('#argocd-coach-host [data-action="begin"]').click();

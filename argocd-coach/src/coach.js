@@ -83,6 +83,11 @@
     ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const ready = () => ['READY', 'INVESTIGATING', 'FIXED'].includes(view?.state);
+  function demoStepId() {
+    if (view?.next_check) return view.next_check.id;
+    if (view && !view.fixed && view.scenario.level !== 1) return `fix:${view.scenario.id}`;
+    return null;
+  }
   const stepClock = new window.GuidedStepClock({
     isPaused: () => document.hidden || briefOpen || noteOpen || collapsed ||
       !view || !['READY', 'INVESTIGATING', 'FIXED'].includes(view.state),
@@ -289,12 +294,7 @@
   function updateDemoCountdown() {
     const timer = root.querySelector('[data-demo-timer]');
     if (!timer) return;
-    const working = !demoCountdown && demoBusy && !demoStopped && !view?.feedback;
-    timer.hidden = !demoCountdown && !working;
-    timer.classList.toggle('working', working);
-    timer.querySelector('[data-demo-label]').textContent = working ? 'Working…' : 'Next action in';
-    timer.querySelector('[data-demo-time]').hidden = working;
-    timer.querySelector('[data-action="advance"]').hidden = !demoCountdown;
+    timer.hidden = !demoCountdown;
     if (!demoCountdown) return;
     const remaining = Math.max(0, demoCountdown.deadline - performance.now());
     timer.querySelector('[data-demo-seconds]').textContent = (remaining / 1000).toFixed(1);
@@ -344,7 +344,10 @@
   function scheduleDemo() {
     if (demoAdvance || demoBusy || demoStopped || briefOpen || view?.mode !== 'demonstration' ||
         view.feedback || !['READY', 'INVESTIGATING', 'FIXED'].includes(view.state)) return;
-    startDemoDelay(driveDemo);
+    const stepId = demoStepId();
+    if (stepId && demoNarration?.id === stepId && demoNarration.phase === 'doing') {
+      void driveDemo();
+    } else startDemoDelay(driveDemo);
   }
 
   async function refresh() {
@@ -424,8 +427,10 @@
         if (view.mode === 'demonstration') {
           const phase = demoNarration?.id === `fix:${view.scenario.id}` ? demoNarration.phase : 'what';
           return `<section class="step-card demo-step"><p class="step-count">Repair</p>
-            ${demoExplanation(view.repair?.demo?.what || view.repair?.action,
-              view.repair?.demo?.why || view.repair?.reason, phase === 'doing' ? 'Doing' : 'Next')}</section>`;
+            ${demoExplanation(phase === 'learning' ? 'Source change committed. Argo CD is applying it.' :
+              view.repair?.demo?.what || view.repair?.action,
+              view.repair?.demo?.why || view.repair?.reason,
+              phase === 'doing' ? 'Doing' : phase === 'learning' ? 'Sent' : 'Next')}</section>`;
         }
         return `<div class="card step-card"><p class="step-eyebrow">What to do next</p><strong>${escape(view.repair?.action)}</strong>
           <p class="step-eyebrow">Why this repair matters</p><p>${escape(view.repair?.reason)}</p>
@@ -574,6 +579,11 @@
       updateBriefCountdown();
       return;
     }
+    const showGitSource = view.fix_surface !== 'none' && view.mode !== 'demonstration' && !recentLearning;
+    const showTerminal = view.mode !== 'demonstration' &&
+      ['git', 'argo-and-git', 'terminal'].includes(view.fix_surface);
+    const sourceActions = `${showGitSource ? '<button class="secondary" data-action="gitea">View Git source</button>' : ''}
+      ${showTerminal ? `<button class="secondary" data-action="terminal">${!terminalOpen ? 'Open terminal' : terminalMinimized ? 'Restore terminal' : 'Minimize terminal'}</button>` : ''}`;
     const body = preparing ? `<p>Preparing the environment and waiting for Argo CD to show the incident…</p>`
       : view.state === 'FAILED' ? `<p class="message error">${escape(view.run_error || 'The run could not start.')}</p>`
       : view.state === 'ABORTED' ? '<p>The run was stopped.</p><a class="secondary" href="/">Return to missions</a>'
@@ -586,11 +596,12 @@
            `<div class="actions"><button class="secondary" data-action="incident-info">Incident info</button><button class="secondary" data-action="hint">Hint</button>
              <button class="secondary" data-action="show-location">Show me</button>
              ${view.fixed && view.scenario.level !== 1 && !view.feedback ? '<button class="primary" data-action="note">Write incident note</button>' : ''}</div>`}
-         <div class="actions">${view.fix_surface !== 'none' && view.mode !== 'demonstration' && !recentLearning ? '<button class="secondary" data-action="gitea">View Git source</button>' : ''}
-           <button class="secondary" data-action="terminal">${!terminalOpen ? 'Open terminal' : terminalMinimized ? 'Restore terminal' : 'Minimize terminal'}</button></div>`;
+         ${showGitSource || showTerminal ? `<div class="actions">${sourceActions}</div>` : ''}`;
     const previousValues = new Map(Array.from(root.querySelectorAll('input, textarea')).map(element => [element.id, element.value]));
     const active = shadow.activeElement?.id;
-    root.innerHTML = `<aside class="panel" ${collapsed ? 'data-collapsed' : ''} aria-label="Argo CD Coach">
+    const stepId = demoStepId();
+    const doing = view.mode === 'demonstration' && demoNarration?.id === stepId && demoNarration?.phase === 'doing';
+    root.innerHTML = `<aside class="panel" ${collapsed ? 'data-collapsed' : ''} ${doing ? 'data-doing' : ''} aria-label="Argo CD Coach">
       <div class="header panel-controls">
       ${view.mode === 'demonstration' && !['ABORTED', 'COMPLETED', 'FAILED'].includes(view.state) ? '<button class="secondary stop-button" data-action="stop" aria-label="Stop demonstration">Stop</button>' : ''}
       <button class="icon-button" data-action="collapse" aria-label="${collapsed ? 'Expand' : 'Collapse'} coach">${collapsed ? '▣' : '−'}</button></div>
@@ -950,17 +961,18 @@
     if (demoBusy || demoStopped || briefOpen || !view || !['READY', 'INVESTIGATING', 'FIXED'].includes(view.state) || view.feedback) return;
     demoBusy = true;
     try {
+      const expectedStep = demoStepId();
+      await sending;
+      if (demoStopped || view.feedback || !ready() || expectedStep !== demoStepId()) return;
       const check = view.next_check;
       if (check) {
+        setDemoNarration(check.id, 'doing');
         if (check.id === 'application' && check.target === 'apps.list') {
           await showLocation(true);
           await sending;
           if (!demoStopped) await refresh();
           return;
         }
-        setDemoNarration(check.id, 'doing');
-        await demoWait();
-        if (demoStopped || view.next_check?.id !== check.id) return;
         if (!check.available) {
           await showLocation(true);
           await sending;
@@ -979,8 +991,6 @@
         sessionStorage.setItem(demoFixKey, 'true');
         const fixStep = `fix:${view.scenario.id}`;
         setDemoNarration(fixStep, 'doing');
-        await demoWait();
-        if (demoStopped) return;
         let result;
         try { result = await request(sessionPath + '/demonstrate-fix', {method: 'POST', body: '{}'}); }
         catch (reason) {
@@ -991,7 +1001,7 @@
         if (demoStopped) return;
         demoPatch = {commit: result.commit || '', diff: result.diff || ''};
         sessionStorage.setItem(demoPatchKey, JSON.stringify(demoPatch));
-        render();
+        setDemoNarration(fixStep, 'learning');
         await demoWait();
         if (!demoStopped) await refresh();
       } else if (view.fixed && view.checks_passed >= view.checks_total) {
@@ -1003,7 +1013,16 @@
           revision: note.revision || view.revision, cause: note.cause || 'No incident', fix: note.fix || 'No fix needed'});
       } else await refresh();
     } catch (reason) { say(reason.message, true); }
-    finally { demoBusy = false; scheduleDemo(); }
+    finally {
+      if (!demoStopped && demoNarration?.phase === 'doing' && demoNarration.id === demoStepId()) {
+        // The action returned without advancing this step. Show the next reading beat
+        // locally; keep the persisted Doing phase so a page navigation resumes the action.
+        demoNarration = {id: demoNarration.id, phase: 'what'};
+        render();
+      }
+      demoBusy = false;
+      scheduleDemo();
+    }
   }
 
   root.addEventListener('click', event => {

@@ -5,6 +5,9 @@
   --coach-mono: "Bitstream Vera Sans Mono","DejaVu Sans Mono",Monaco,Courier,monospace;
   --coach-accent: #00a2b3;
   --coach-accent-text: #00828f;
+  --coach-doing-accent: #e0a200;
+  --coach-doing-text: #965800;
+  --coach-doing-surface: #fff8e8;
   --coach-sidebar: #0f2733;
   --coach-page: #dee6eb;
   --coach-surface: #ffffff;
@@ -33,6 +36,9 @@
 }
 :host([data-theme="dark"]) {
   --coach-accent-text: #1aabbb;
+  --coach-doing-accent: #f4c030;
+  --coach-doing-text: #f4c030;
+  --coach-doing-surface: #423516;
   --coach-page: #100f0f;
   --coach-surface: #303237;
   --coach-border: #495763;
