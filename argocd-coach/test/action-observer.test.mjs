@@ -25,7 +25,7 @@ function observerHarness() {
   return {actions, observer, navigate};
 }
 
-test('Argo 3.3 panel and resource URLs identify actual information targets', () => {
+test('Argo 3.5 panel and resource URLs identify actual information targets', () => {
   const {actions, navigate} = observerHarness();
   const app = '/argocd/applications/argocd/shop-web-prod';
   navigate(`${app}?conditions=true`);

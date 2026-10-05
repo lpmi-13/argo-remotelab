@@ -1,0 +1,19 @@
+{{- if .Values.lab.postSyncVerify }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: django-post-sync-verify
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: verify
+        image: busybox:1.37.0
+        command: [sh, -c, 'echo Release is healthy']
+{{- end }}

@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1
-ARG ROOTFS_RELEASE=e015d4ac.1
+ARG ROOTFS_RELEASE=b3903e8c.1
 
 FROM ghcr.io/iximiuz/labs/rootfs:ubuntu-k3s-server-${ROOTFS_RELEASE}
 
 ARG TARGETARCH
-ARG SOPS_VERSION=3.13.0
-ARG AGE_VERSION=1.1.1
+ARG SOPS_VERSION=3.13.3
+ARG AGE_VERSION=1.3.2
 
 USER root
 ENV HOME=/root

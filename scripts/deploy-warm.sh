@@ -8,6 +8,7 @@ source "${script_dir}/lib/versions.sh"
 
 colima_profile="${COLIMA_PROFILE:-argo-remotelab}"
 image_tag="${IMAGE_TAG:-${DEFAULT_FIRST_PARTY_IMAGE_TAG}}"
+django_image="${DJANGO_IMAGE_REPO}:${image_tag}"
 hash_script="${script_dir}/lib/image-source-hash.py"
 check_only=false
 started_at=$SECONDS
@@ -86,8 +87,8 @@ image_present() {
 
 build_image() {
   local component="$1" image="$2" context dockerfile
-  if [[ "$component" == scenario-controller ]]; then
-    context="$repo_root/scenario-controller"
+  if [[ "$component" == scenario-controller || "$component" == sample-django-app ]]; then
+    context="$repo_root/$component"
   else
     context="$repo_root"
   fi
@@ -185,6 +186,11 @@ for target in argocd/argocd-server argocd/argocd-repo-server \
   kubectl -n "$namespace" rollout status "deployment/$deployment" --timeout=15s >/dev/null ||
     fail "$target is not ready"
 done
+expected_dependencies_hash="$(python3 "$hash_script" dependencies)"
+deployed_dependencies_hash="$(kubectl -n argocd get configmap remotelab-deploy-state \
+  -o jsonpath='{.data.dependencies_hash}' 2>/dev/null || true)"
+[[ "$expected_dependencies_hash" == "$deployed_dependencies_hash" ]] ||
+  fail "pinned infrastructure dependencies changed; run the full deployment to replace Argo CD, PostgreSQL, and Gitea"
 key_file="$repo_root/secrets/keys/local.key"
 [[ -s "$key_file" ]] || fail "missing $key_file"
 for namespace in argocd applications; do
@@ -248,6 +254,19 @@ else
   echo "  Reusing the existing baseline and release history"
 fi
 
+django_source_hash="$(python3 "$hash_script" sample-django-app)"
+deployed_django_hash="$(kubectl -n argocd get configmap remotelab-deploy-state \
+  -o jsonpath='{.data.sample_django_app}' 2>/dev/null || true)"
+deployed_django_tag="$(kubectl -n argocd get configmap remotelab-deploy-state \
+  -o jsonpath='{.data.image_tag}' 2>/dev/null || true)"
+django_rebuilt=false
+if [[ "$django_source_hash" != "$deployed_django_hash" || "$deployed_django_tag" != "$image_tag" ]] ||
+    ! image_present "$django_image"; then
+  echo "  Building sample Django image (source or image changed)..."
+  build_image sample-django-app "$django_image"
+  django_rebuilt=true
+fi
+
 kubectl apply -f "$repo_root/argocd-apps/projects.yaml"
 kubectl apply -f "$repo_root/argocd-apps/django-app.yaml"
 kubectl apply -f "$repo_root/argocd-apps/platform-apps.yaml"
@@ -258,6 +277,12 @@ if [[ "$source_changed" == true ]]; then
   bash "$script_dir/seed-history.sh" "$gitea_url"
 else
   bash "$script_dir/seed-history.sh" "$gitea_url" --wait-only
+fi
+if [[ "$django_rebuilt" == true ]]; then
+  for namespace in applications shop-staging; do
+    kubectl -n "$namespace" rollout restart deployment/django >/dev/null
+    kubectl -n "$namespace" rollout status deployment/django --timeout=180s
+  done
 fi
 
 echo "Step 3: Updating changed first-party images..."

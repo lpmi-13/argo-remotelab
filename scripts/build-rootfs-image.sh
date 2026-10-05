@@ -25,6 +25,8 @@ runtime_images=(
   "${GITEA_IMAGE}"
   "${GITEA_ADMIN_IMAGE}"
   "${BUSYBOX_IMAGE}"
+  "${ALPINE_IMAGE}"
+  "${CURL_IMAGE}"
 )
 
 first_party_images=(

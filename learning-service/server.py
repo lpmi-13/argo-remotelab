@@ -49,10 +49,17 @@ TOKEN = re.compile(r"\$\{([a-z_]+)\}")
 def load_packs():
     global CATALOG, PACKS, TARGETS
     CATALOG = json.loads((LEARNING_DIR / "catalog.json").read_text())
-    TARGETS = json.loads((LEARNING_DIR / "targets" / "argocd-3.3.json").read_text())["targets"]
-    framing = json.loads((LEARNING_DIR / "incident-framing.json").read_text())["scenarios"]
+    TARGETS = json.loads((LEARNING_DIR / "targets" / "argocd-3.5.json").read_text())["targets"]
+    framing_data = json.loads((LEARNING_DIR / "incident-framing.json").read_text())
+    framing = framing_data["scenarios"]
+    demo = framing_data["demo"]
+    debrief = framing_data["debrief"]
     if set(framing) != set(CATALOG["scenarios"]):
         raise ValueError("incident framing must cover every catalog scenario")
+    if set(demo) != set(framing):
+        raise ValueError("demo narration must cover every catalog scenario")
+    if set(debrief) != set(framing):
+        raise ValueError("debrief must cover every catalog scenario")
     PACKS = {}
     for name in CATALOG["scenarios"]:
         pack = json.loads((LEARNING_DIR / "scenarios" / name / "pack.json").read_text())
@@ -61,19 +68,34 @@ def load_packs():
         story = framing[name]
         if set(story["steps"]) != {check["id"] for check in pack["checks"]}:
             raise ValueError("incident framing steps do not match checks in " + name)
+        demo_steps = demo[name]
+        expected_demo = set(story["steps"]) | ({"repair"} if pack["level"] != 1 else set())
+        if set(demo_steps) != expected_demo or any(
+                not all(copy.get(field) for field in ("what", "why"))
+                for copy in demo_steps.values()):
+            raise ValueError("incomplete demo narration for " + name)
+        debrief_steps = debrief[name]
+        if set(debrief_steps) != expected_demo or any(
+                not all(copy.get(field) for field in ("action", "finding"))
+                for copy in debrief_steps.values()):
+            raise ValueError("incomplete debrief for " + name)
         if not all(story["briefing"].get(field) for field in
-                   ("source", "headline", "summary", "impact", "objective")):
+                   ("source", "headline", "summary")):
             raise ValueError("incomplete incident briefing for " + name)
         if pack["level"] != 1 and not all((story.get("repair") or {}).get(field)
                                           for field in ("action", "reason")):
             raise ValueError("incomplete repair framing for " + name)
         pack["briefing"] = story["briefing"]
-        pack["repair"] = story.get("repair")
+        pack["repair"] = ({**story["repair"], "demo": demo_steps["repair"],
+                           "debrief": debrief_steps["repair"]}
+                          if pack["level"] != 1 else None)
         for check in pack["checks"]:
             step = story["steps"][check["id"]]
             if not all(step.get(field) for field in ("action", "reason", "learning")):
                 raise ValueError("incomplete step framing for %s/%s" % (name, check["id"]))
             check.update(step)
+            check["demo"] = demo_steps[check["id"]]
+            check["debrief"] = debrief_steps[check["id"]]
         for target in pack["targets"]:
             if target not in TARGETS:
                 raise ValueError("unknown target %s in %s" % (target, name))
@@ -225,6 +247,7 @@ def next_check(session, probe):
                 "action": expand(check["action"], context),
                 "reason": expand(check["reason"], context),
                 "learning": expand(check["learning"], context),
+                "demo": expand(check["demo"], context),
                 "available": any(item in session["visited"] for item in alternatives)}
         if session["mode"] == "demonstration":
             result["demonstration_answer"] = expand(check["answer"], context)
@@ -243,6 +266,10 @@ def all_checks(session, probe):
                        "action": "Once the Application is Healthy and Synced, open History and Rollback and read the newest deployed revision.",
                        "reason": "A pushed fix is only a proposal until Argo records a successful deployment. History connects the recovered workload to the exact commit that reached it.",
                        "learning": "The deployed revision confirms which commit Argo applied after the repair. Include it in the incident note.",
+                       "demo": {"what": "Open ${application} → History and Rollback; read the newest deployed revision.",
+                                "why": "History links the recovered workload to the Git commit Argo applied."},
+                       "debrief": {"action": "We checked History and Rollback after the fix.",
+                                   "finding": "Argo deployed revision ${answer}."},
                        "requires_fixed": True})
     return [check for check in checks if not check.get("requires_fixed") or probe.get("fixed")]
 
@@ -334,6 +361,10 @@ def record_action(session, action, probe):
         if target not in {"apps.list", "apps.filter", "settings.repos"} and details.get("application") != session["application"]:
             raise ValueError("visit is for a different application")
         session["visited"].add(target)
+        if session["mode"] == "demonstration" and target == "app.header" and "apps.list" in session["visited"]:
+            check = next_check(session, probe)
+            if check and check["id"] == "application" and check["target"] == "apps.list":
+                session["passed"].add(check["id"])
     elif kind == "evidence_check_answered":
         if session["mode"] == "challenge":
             raise ValueError("challenge mode uses the incident note")
@@ -368,6 +399,57 @@ def record_action(session, action, probe):
 
 def field_credit(actual, expected):
     return 1.0 if answer_matches(actual, expected) else 0.0
+
+
+def debrief_steps(session, probe):
+    """Summarize observed evidence and durable repairs in the order they happened."""
+    context = context_for(session, probe)
+    actions = session["actions"]
+    steps = []
+
+    def add_step(check, position):
+        answer = expand(check["answer"], context)
+        copy = expand(check["debrief"], {**context, "answer": answer})
+        steps.append((position, copy))
+
+    if session["mode"] == "challenge":
+        first_visits = {}
+        for index, action in enumerate(actions):
+            if action["type"] == "target_visited":
+                first_visits.setdefault(action["details"].get("target"), index)
+        for order, check in enumerate(session["pack"]["checks"]):
+            targets = [target for target in check_targets(check) if target in session["visited"]]
+            if targets:
+                add_step(check, min(first_visits.get(target, len(actions) + order) for target in targets))
+    else:
+        for order, check in enumerate(session["pack"]["checks"]):
+            if check["id"] in session["passed"]:
+                add_step(check, order)
+
+    if session["pack"]["repair"] and probe.get("fixed") and probe.get("durable"):
+        repair = expand(session["pack"]["repair"]["debrief"], context)
+        if session["mode"] == "challenge":
+            head = probe.get("git_revision")
+            commits = [index for index, action in enumerate(actions)
+                       if action["type"] == "commit_pushed" and action["details"].get("sha") == head
+                       and head != session.get("trigger_revision")]
+            position = commits[-1] if commits else len(actions) + len(steps)
+        else:
+            position = len(session["pack"]["checks"])
+        steps.append((position, repair))
+
+    if session["mode"] != "challenge" and "verify-revision" in session["passed"]:
+        check = next((check for check in all_checks(session, probe)
+                      if check["id"] == "verify-revision"), None)
+        if check:
+            add_step(check, len(session["pack"]["checks"]) + 1)
+
+    if not steps and session["note"]:
+        cause = session["note"].get("cause", "").strip()
+        steps.append((0, {"action": "We submitted an incident note.",
+                          "finding": "The note recorded the cause as “%s”." % cause.rstrip(".") if cause
+                          else "The note did not identify a cause."}))
+    return [copy for _, copy in sorted(steps, key=lambda item: item[0])]
 
 
 def score(session, probe):
@@ -446,6 +528,7 @@ def score(session, probe):
             "trigger_revision": session.get("trigger_revision", ""),
             "deployed_revision": context_for(session, probe)["revision"],
             "fix_commit": commits[-1] if commits else None,
+            "debrief_steps": debrief_steps(session, probe),
             "practice_notes": practice_notes,
             "note": note, "leaked_secret": leaked,
             "assistance": {"hints": sum(action["type"] == "hint_requested" for action in actions),

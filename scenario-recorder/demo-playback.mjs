@@ -77,10 +77,10 @@ async function waitForDebrief(page, timeout) {
 
 async function verifyIncidentDemo(page, scenario, runID) {
   await page.locator('#argocd-coach-host [data-action="begin"]').click();
-  await page.locator('#argocd-coach-host .demo-patch pre').waitFor({timeout: 6 * 60_000});
+  await page.locator('#argocd-coach-host .demo-patch pre').waitFor({timeout: 20 * 60_000});
   await page.screenshot({path: path.join(outputDir, 'demo-incident-patch.png')});
   console.log(`${scenario} source patch visible`);
-  await waitForDebrief(page, 5 * 60_000);
+  await waitForDebrief(page, 20 * 60_000);
   const incident = await api('/api/runs/' + encodeURIComponent(runID));
   if (incident.state !== 'COMPLETED') throw new Error(`incident demo ended in ${incident.state}`);
   await page.screenshot({path: path.join(outputDir, 'demo-incident-debrief.png')});
@@ -117,13 +117,13 @@ async function main() {
     console.log(`closed-tab run replaced: ${runID}`);
 
     await page.locator('#argocd-coach-host [data-action="begin"]').click();
-    await page.locator('#argocd-coach-host .coach-pointer[data-visible]').waitFor({timeout: 30_000});
+    await page.locator('#argocd-coach-host .coach-pointer[data-visible]').waitFor({timeout: 2 * 60_000});
     await page.screenshot({path: path.join(outputDir, 'demo-cursor.png')});
     console.log('coach pointer visible');
-    await page.locator('#argocd-coach-host .coach-pointer[data-click]').waitFor({timeout: 45_000});
+    await page.locator('#argocd-coach-host .coach-pointer[data-click]').waitFor({timeout: 2 * 60_000});
     await page.screenshot({path: path.join(outputDir, 'demo-click.png')});
     console.log('coach pointer cued an Argo click');
-    await waitForDebrief(page, 150_000);
+    await waitForDebrief(page, 20 * 60_000);
     const finished = await api('/api/runs/' + encodeURIComponent(runID));
     if (finished.state !== 'COMPLETED') throw new Error(`demo ended in ${finished.state}`);
     await page.screenshot({path: path.join(outputDir, 'demo-debrief.png')});

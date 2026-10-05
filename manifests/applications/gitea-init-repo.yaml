@@ -14,7 +14,7 @@ spec:
       restartPolicy: OnFailure
       initContainers:
       - name: wait-for-gitea
-        image: curlimages/curl:latest
+        image: curlimages/curl:8.22.0
         command:
         - sh
         - -c
@@ -33,7 +33,7 @@ spec:
           sleep 3
       containers:
       - name: init-repo
-        image: alpine:3.19
+        image: alpine:3.24.2
         env:
         - name: SOPS_AGE_KEY
           valueFrom:
@@ -51,11 +51,16 @@ spec:
         - |
           set -ex
           apk add --no-cache git curl jq
+          case "$(uname -m)" in
+            x86_64|amd64) arch=amd64 ;;
+            aarch64|arm64) arch=arm64 ;;
+            *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
 
           # Install sops and age
-          wget -qO /usr/local/bin/sops https://github.com/getsops/sops/releases/download/v3.13.0/sops-v3.13.0.linux.amd64
+          wget -qO /usr/local/bin/sops "https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.${arch}"
           chmod +x /usr/local/bin/sops
-          wget -qO- https://github.com/FiloSottile/age/releases/download/v1.1.1/age-v1.1.1-linux-amd64.tar.gz | tar xz -C /tmp
+          wget -qO- "https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-${arch}.tar.gz" | tar xz -C /tmp
           mv /tmp/age/age /usr/local/bin/
           mv /tmp/age/age-keygen /usr/local/bin/
           chmod +x /usr/local/bin/age /usr/local/bin/age-keygen

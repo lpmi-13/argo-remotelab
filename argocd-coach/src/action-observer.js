@@ -1,4 +1,4 @@
-/* Argo CD 3.3.7 semantic observer. Network and URL state are preferred over
+/* Argo CD 3.5.3 semantic observer. Network and URL state are preferred over
  * selectors. A small selector registry covers panels without either signal. */
 (function () {
   const targets = new Set([
@@ -10,7 +10,7 @@
   function appFromPath(pathname) {
     const api = pathname.match(/\/argocd\/api\/v1\/applications\/([^/?#]+)/);
     if (api) return decodeURIComponent(api[1]);
-    // Argo 3.3 UI routes include the Application namespace before its name.
+    // Argo UI routes include the Application namespace before its name.
     const ui = pathname.match(/\/argocd\/applications\/([^/?#]+)(?:\/([^/?#]+))?/);
     return ui ? decodeURIComponent(ui[2] || ui[1]) : null;
   }
@@ -25,7 +25,7 @@
       addEventListener('argo-coach:url', this.urlListener);
       addEventListener('argo-coach:network', this.networkListener);
       addEventListener('submit', event => this.fromForm(event), true);
-      fetch('/coach/assets/selectors/argocd-3.3.json').then(response => response.json())
+      fetch('/coach/assets/selectors/argocd-3.5.json').then(response => response.json())
         .then(registry => { this.registry = registry; this.scanDOM(); }).catch(() => {});
       this.mutations = new MutationObserver(() => {
         if (this.scanTimer) return;

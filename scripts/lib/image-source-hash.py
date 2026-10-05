@@ -8,11 +8,24 @@ from pathlib import Path
 
 SOURCES = {
     "repository": (
+        "sample-django-app/app",
         "sample-django-app/chart",
         "sample-django-app/platform",
         "scripts/reset-gitea-repo.sh",
         "scripts/seed-history.sh",
     ),
+    "dependencies": (
+        "manifests/gitops/argocd-install.yaml",
+        "manifests/gitops/argocd-install.version",
+        "manifests/gitops/argocd-sops-config.yaml",
+        "manifests/applications/postgresql.yaml",
+        "manifests/applications/gitea.yaml",
+        "manifests/applications/gitea-init-user.yaml",
+        "manifests/applications/gitea-init-repo.yaml",
+        "scripts/lib/versions.sh",
+        "scripts/deploy-all.sh",
+    ),
+    "sample-django-app": ("sample-django-app/Dockerfile", "sample-django-app/app"),
     "scenario-controller": ("scenario-controller",),
     "learning-service": ("learning-service/Dockerfile", "learning-service/server.py", "learning"),
     "lab-gateway": (

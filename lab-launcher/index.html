@@ -23,7 +23,7 @@
 <header>✦ Argo CD RemoteLab</header>
 <main>
   <h1>Learn the Argo CD console</h1>
-  <p>Choose a mission. The coach opens the briefing while the lab prepares the deployment.</p>
+  <p>Choose a mission. The lab opens Argo CD when the scenario is ready.</p>
   <section class="card" aria-label="Start a mission">
     <form id="launch-form">
       <input type="hidden" id="seed" name="seed">
@@ -77,13 +77,12 @@
       const previous=JSON.parse(sessionStorage.getItem('argo-coach:handoff')||'null');
       if(previous?.session)sessionStorage.removeItem('argo-coach:initial-view:'+previous.session);
       sessionStorage.setItem('argo-coach:initial-view:'+session.session_id,JSON.stringify(initialView));
-      status.textContent='Opening the briefing…';
-      const url=new URL('/argocd/applications',location.origin);
-      url.searchParams.set('coach_session',session.session_id);
-      url.searchParams.set('coach_token',token);
-      url.searchParams.set('coach_run',run.id);
-      url.searchParams.set('coach_mode',payload.mode);
-      location.assign(url);
+      sessionStorage.removeItem('argo-coach:handoff');
+      sessionStorage.setItem('argo-coach:preparing',JSON.stringify({
+        run_id:run.id,session_id:session.session_id,token,mode:payload.mode,
+        title:initialView.scenario?.title||payload.scenario,
+      }));
+      location.assign('/preparing.html');
     }catch(reason){status.textContent=reason.message;status.classList.add('error');button.disabled=false}
   });
   document.querySelector('#scenario').addEventListener('change',event=>{

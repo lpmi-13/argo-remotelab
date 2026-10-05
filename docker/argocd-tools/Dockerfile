@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1
-FROM alpine:3.19
+FROM alpine:3.24.2
 
 ARG TARGETARCH
-ARG HELM_SECRETS_VERSION=4.5.1
-ARG SOPS_VERSION=3.13.0
-ARG AGE_VERSION=1.1.1
+ARG HELM_SECRETS_VERSION=4.7.8
+ARG SOPS_VERSION=3.13.3
+ARG AGE_VERSION=1.3.2
 
 RUN set -eux; \
     apk add --no-cache ca-certificates sed tar wget; \

@@ -35,7 +35,7 @@ test('dark coach text, status and buttons meet WCAG AA', () => {
   assert.ok(ratio(dark['--coach-button-text'], dark['--coach-accent']) >= 4.5);
 });
 
-test('health colors match Argo CD 3.3.7 compiled CSS', () => {
+test('health colors match Argo CD 3.5.3 UI palette', () => {
   assert.equal(light['--coach-healthy'], '#18be94');
   assert.equal(light['--coach-progressing'], '#0dadea');
   assert.equal(light['--coach-degraded'], '#e96d76');

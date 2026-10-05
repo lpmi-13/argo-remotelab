@@ -3,7 +3,7 @@ import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium} from 'playwright';
-import selectors from '../argocd-coach/selectors/argocd-3.3.json' with {type: 'json'};
+import selectors from '../argocd-coach/selectors/argocd-3.5.json' with {type: 'json'};
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const outputDir = process.env.RECORDING_DIR || path.join(here, 'artifacts');
@@ -87,15 +87,24 @@ async function assertTheme(page, expected) {
 }
 
 async function comparePanel(page, theme) {
-  const name = `argocd-3.3.7-panel-${theme}.png`;
+  const name = `argocd-3.5.3-panel-${theme}.png`;
   const actual = path.join(outputDir, `panel-${theme}.png`);
   const baseline = path.join(here, 'baselines', name);
   if (process.env.UPDATE_BASELINES === '1') {
     await writeFile(baseline, await readFile(actual));
     return;
   }
+  let expected;
+  try {
+    expected = await readFile(baseline);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      throw new Error(`No Argo CD 3.5.3 panel baseline at ${baseline}; review the captured panel and rerun with UPDATE_BASELINES=1`);
+    }
+    throw error;
+  }
   const images = {
-    expected: (await readFile(baseline)).toString('base64'),
+    expected: expected.toString('base64'),
     actual: (await readFile(actual)).toString('base64'),
   };
   const result = await page.evaluate(async ({expected, actual}) => {
@@ -152,7 +161,7 @@ async function main() {
     forward = await forwardGateway();
     const created = await api('/api/runs', {method: 'POST', body: JSON.stringify({
       scenario: 'console-orientation', mode: 'guided', environment: 'prod',
-      scenario_key: 'visual-argocd-3.3',
+      scenario_key: 'visual-argocd-3.5',
     })});
     runID = created.run.id;
     await readyRun(runID);
@@ -301,7 +310,7 @@ async function main() {
     });
     if (forward) forward.kill('SIGTERM');
     await writeFile(path.join(outputDir, 'recording.json'), JSON.stringify({
-      argo_version: '3.3.7', playwright_version: '1.62.1', started_at: startedAt,
+      argo_version: '3.5.3', playwright_version: '1.63.0', started_at: startedAt,
       completed_at: new Date().toISOString(), run_id: runID,
       viewport, artifacts, page_errors: errors,
     }, null, 2));

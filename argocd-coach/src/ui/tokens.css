@@ -1,5 +1,5 @@
-/* Extracted from Argo CD v3.3.7 compiled CSS in main.js.
- * Status colors match Argo; separate text colors meet WCAG AA. */
+/* Argo CD v3.5.3 UI palette; status colors match Argo.
+ * Text colors are adjusted to meet WCAG AA. */
 :host {
   --coach-font: "Heebo",sans-serif;
   --coach-mono: "Bitstream Vera Sans Mono","DejaVu Sans Mono",Monaco,Courier,monospace;

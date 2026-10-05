@@ -47,9 +47,10 @@ class DeploymentContractTests(unittest.TestCase):
                 source = Path(path)
                 self.assertEqual(source.parts[:2], ("chart", "django-app"), path)
                 if source.name == "secrets.yaml.enc":
-                    # Deployment creates this file after generating the age key.
-                    for script in ("scripts/deploy-all.sh", "scripts/deploy-preloaded-vm.sh"):
-                        self.assertIn("secrets.yaml.enc", (ROOT / script).read_text())
+                    # Each deployment path creates encrypted values after generating an age key.
+                    self.assertIn("reset-gitea-repo.sh", (ROOT / "scripts/deploy-all.sh").read_text())
+                    self.assertIn("secrets.yaml.enc", (ROOT / "scripts/reset-gitea-repo.sh").read_text())
+                    self.assertIn("secrets.yaml.enc", (ROOT / "scripts/deploy-preloaded-vm.sh").read_text())
                 else:
                     self.assertTrue((ROOT / "sample-django-app" / source).is_file(), path)
 

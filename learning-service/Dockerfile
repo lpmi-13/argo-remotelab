@@ -1,4 +1,4 @@
-FROM python:3.12-alpine
+FROM python:3.14.8-alpine3.24
 WORKDIR /app
 COPY learning-service/server.py /app/server.py
 COPY learning /app/learning

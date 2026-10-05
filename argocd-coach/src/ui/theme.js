@@ -2,7 +2,7 @@
   function effectiveTheme() {
     const root = document.documentElement;
     const body = document.body;
-    // Argo 3.3 applies its active theme to a React wrapper below <body>.
+    // Argo applies its active theme to a React wrapper below <body>.
     // That wrapper wins over an old local preference or OS color scheme.
     const argoTheme = body?.querySelector('.theme-dark, .theme-light');
     if (argoTheme?.classList.contains('theme-dark')) return 'dark';

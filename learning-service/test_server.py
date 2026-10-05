@@ -38,6 +38,14 @@ class LearningServiceTests(unittest.TestCase):
         for pack in server.PACKS.values():
             self.assertTrue(pack["checks"])
             self.assertTrue(set(pack["targets"]).issubset(server.TARGETS))
+            briefing = pack["briefing"]
+            self.assertEqual(set(briefing), {"source", "headline", "summary"})
+            self.assertLessEqual(len(briefing["summary"].split()), 16)
+            for step in pack["checks"] + ([pack["repair"]] if pack["repair"] else []):
+                copy = step["debrief"]
+                self.assertTrue(copy["action"].startswith("We "))
+                self.assertLessEqual(len(copy["action"].split()), 16)
+                self.assertLessEqual(len(copy["finding"].split()), 16)
 
     def test_curriculum_starts_at_level_one_and_orientation_has_no_repair_step(self):
         self.assertEqual([item["level"] for item in server.CATALOG["levels"]], [1, 2, 3, 4, 5])
@@ -59,6 +67,49 @@ class LearningServiceTests(unittest.TestCase):
         self.assertIn("healthy peer", view["next_check"]["reason"])
         self.assertNotIn("demonstration_answer", view["next_check"])
         self.assertNotIn("${", json.dumps(view["briefing"]))
+
+    def test_demo_steps_name_the_view_and_why_its_evidence_matters(self):
+        run = session(name="console-orientation", mode="demonstration")
+        run["environment"] = "staging"
+        run["application"] = "shop-web-staging"
+        view = server.build_session_view(run, {"state": "READY"}, probe(), False)
+        self.assertEqual(view["next_check"]["demo"], {
+            "what": "Find and click shop-web-staging in Applications.",
+            "why": "Its name and environment label identify the release we need to verify.",
+        })
+        self.assertNotIn("${", json.dumps(view["next_check"]["demo"]))
+        places = ("applications", "header", "history and rollback", "tree", "manifest",
+                  "sync status", "conditions", "repositories", "git", "terminal",
+                  "deployment template", "repository url")
+        for pack in server.PACKS.values():
+            steps = server.all_checks(session(pack["id"]), probe())
+            if pack["repair"]:
+                steps.append(pack["repair"])
+            for step in steps:
+                copy = step["demo"]
+                if step.get("target") == "apps.list" and step["id"] == "application":
+                    self.assertIn("click", copy["what"].lower(), pack["id"])
+                self.assertTrue(any(place in copy["what"].lower() for place in places),
+                                f'{pack["id"]}: {copy["what"]}')
+                self.assertLessEqual(len(copy["what"].split()), 16)
+                self.assertLessEqual(len(copy["why"].split()), 16)
+
+    def test_demo_opening_the_application_completes_the_first_check(self):
+        run = session(name="console-orientation", mode="demonstration")
+        server.record_action(run, {"sequence": 1, "type": "target_visited",
+                                   "details": {"target": "apps.list"}}, probe())
+        self.assertEqual(run["passed"], set())
+        server.record_action(run, {"sequence": 2, "type": "target_visited",
+                                   "details": {"target": "app.header", "application": "shop-web-prod"}}, probe())
+        self.assertEqual(run["passed"], {"application"})
+        self.assertEqual(server.next_check(run, probe())["id"], "health")
+
+        guided = session(name="console-orientation", mode="guided")
+        server.record_action(guided, {"sequence": 1, "type": "target_visited",
+                                      "details": {"target": "apps.list"}}, probe())
+        server.record_action(guided, {"sequence": 2, "type": "target_visited",
+                                      "details": {"target": "app.header", "application": "shop-web-prod"}}, probe())
+        self.assertEqual(guided["passed"], set())
 
     def test_catalog_introduces_the_signal_without_naming_the_answer(self):
         catalog = {item["id"]: item for item in server.public_catalog()["scenarios"]}
@@ -83,6 +134,7 @@ class LearningServiceTests(unittest.TestCase):
         view = server.build_session_view(run, {"state": "FIXED"}, probe(), False)
         self.assertEqual(view["next_check"]["id"], "verify-revision")
         self.assertIn("exact commit", view["next_check"]["reason"])
+        self.assertIn("History and Rollback", view["next_check"]["demo"]["what"])
         self.assertEqual(view["next_check"]["demonstration_answer"], "abc123")
 
     def test_repository_failure_includes_working_connection_comparison(self):
@@ -115,6 +167,60 @@ class LearningServiceTests(unittest.TestCase):
         run["note"] = {"resource": "Deployment/django", "cause": "The deployment references a ConfigMap that does not exist",
                        "revision": "abc123", "evidence": "django-app-missing-config", "fix": "Restored reference"}
         self.assertEqual(server.score(run, probe())["total"], 100)
+
+    def test_debrief_lists_only_completed_checks_in_curriculum_order(self):
+        run = session(name="console-orientation", mode="guided")
+        run["passed"] = {"revision", "application"}
+        steps = server.score(run, probe())["debrief_steps"]
+        self.assertEqual([step["action"] for step in steps], [
+            "We found shop-web-prod in Applications.",
+            "We opened History and Rollback.",
+        ])
+        self.assertEqual(steps[1]["finding"], "Argo deployed revision abc123.")
+
+    def test_incident_debrief_places_repair_before_revision_verification(self):
+        run = session(name="missing-configmap", mode="demonstration")
+        run["passed"] = {"application", "missing-name", "verify-revision"}
+        steps = server.score(run, probe())["debrief_steps"]
+        self.assertEqual([step["action"] for step in steps], [
+            "We found shop-web-prod in Applications.",
+            "We opened the failing Pod's Events.",
+            "We corrected the ConfigMap reference in Git.",
+            "We checked History and Rollback after the fix.",
+        ])
+        self.assertEqual(steps[-1]["finding"], "Argo deployed revision abc123.")
+
+    def test_challenge_debrief_uses_visited_targets_in_visit_order(self):
+        run = session(name="repo-auth", mode="challenge")
+        run["visited"] = {"apps.list", "settings.repos"}
+        run["actions"] = [
+            {"type": "target_visited", "details": {"target": "settings.repos"}},
+            {"type": "target_visited", "details": {"target": "apps.list"}},
+        ]
+        steps = server.score(run, probe(False, False))["debrief_steps"]
+        self.assertEqual([step["action"] for step in steps], [
+            "We opened Settings → Repositories.",
+            "We found shop-web-prod in Applications.",
+        ])
+        self.assertEqual(steps[0]["finding"], "The connected Gitea entry used HTTP.")
+
+    def test_challenge_without_console_visits_summarizes_its_note(self):
+        run = session(mode="challenge")
+        run["note"] = {"cause": "A missing ConfigMap"}
+        self.assertEqual(server.score(run, probe(False, False))["debrief_steps"], [
+            {"action": "We submitted an incident note.",
+             "finding": "The note recorded the cause as “A missing ConfigMap”."},
+        ])
+
+    def test_every_mission_debrief_expands_its_findings(self):
+        for name, pack in server.PACKS.items():
+            run = session(name=name, mode="demonstration")
+            run["passed"] = {check["id"] for check in pack["checks"]}
+            if pack["level"] != 1:
+                run["passed"].add("verify-revision")
+            steps = server.score(run, probe())["debrief_steps"]
+            self.assertEqual(len(steps), len(pack["checks"]) + 2 * (pack["level"] != 1), name)
+            self.assertNotIn("${", json.dumps(steps), name)
 
     def test_unfixed_run_is_capped_at_50(self):
         run = session()

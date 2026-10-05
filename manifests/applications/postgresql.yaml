@@ -15,9 +15,27 @@ spec:
       labels:
         app: postgresql
     spec:
+      initContainers:
+      - name: reject-old-postgresql-data
+        image: busybox:1.37.0
+        command:
+        - sh
+        - -ec
+        - |
+          for version_file in /var/lib/postgresql/PG_VERSION /var/lib/postgresql/data/PG_VERSION /var/lib/postgresql/*/docker/PG_VERSION; do
+            [ -f "$version_file" ] || continue
+            data_version="$(cat "$version_file")"
+            if [ "$data_version" != "18" ]; then
+              echo "PostgreSQL data is version $data_version at $version_file; migrate it to 18 or run a full lab reset before using postgres:18.6." >&2
+              exit 1
+            fi
+          done
+        volumeMounts:
+        - name: postgresql-storage
+          mountPath: /var/lib/postgresql
       containers:
       - name: postgresql
-        image: postgres:16
+        image: postgres:18.6
         env:
         - name: POSTGRES_DB
           value: "gitea"
@@ -29,7 +47,7 @@ spec:
               name: postgresql-secret
               key: password
         - name: PGDATA
-          value: /var/lib/postgresql/data/pgdata
+          value: /var/lib/postgresql/18/docker
         ports:
         - containerPort: 5432
         resources:
@@ -41,7 +59,7 @@ spec:
             memory: 256Mi
         volumeMounts:
         - name: postgresql-storage
-          mountPath: /var/lib/postgresql/data
+          mountPath: /var/lib/postgresql
         - name: init-scripts
           mountPath: /docker-entrypoint-initdb.d
       volumes:

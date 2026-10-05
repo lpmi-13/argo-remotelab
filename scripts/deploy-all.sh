@@ -6,7 +6,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "${SCRIPT_DIR}/lib/platform.sh"
 source "${SCRIPT_DIR}/lib/versions.sh"
 
-TRAEFIK_CRD_DEFINITIONS_URL="https://raw.githubusercontent.com/traefik/traefik/v3.5/docs/content/reference/dynamic-configuration/kubernetes-crd-definition-v1.yml"
+TRAEFIK_CRD_DEFINITIONS_URL="https://raw.githubusercontent.com/traefik/traefik/v3.7.13/docs/content/reference/dynamic-configuration/kubernetes-crd-definition-v1.yml"
 ARGOCD_ADMIN_PASSWORD="remotelab"
 # bcrypt hash for ARGOCD_ADMIN_PASSWORD. ArgoCD stores the admin password hash
 # in argocd-secret rather than the generated initial-admin secret.
@@ -16,6 +16,7 @@ SCENARIO_CONTROLLER_IMAGE="${SCENARIO_CONTROLLER_IMAGE_REPO}:${IMAGE_TAG}"
 LEARNING_SERVICE_IMAGE="${LEARNING_SERVICE_IMAGE_REPO}:${IMAGE_TAG}"
 LAB_GATEWAY_IMAGE="${LAB_GATEWAY_IMAGE_REPO}:${IMAGE_TAG}"
 LAB_TERMINAL_IMAGE="${LAB_TERMINAL_IMAGE_REPO}:${IMAGE_TAG}"
+DJANGO_IMAGE="${DJANGO_IMAGE_REPO}:${IMAGE_TAG}"
 GITEA_LOCAL_URL="http://localhost:3000"
 
 show_help() {
@@ -328,6 +329,16 @@ if ! kubectl cluster-info &>/dev/null; then
 fi
 echo ""
 
+if [ "$SKIP_CLEANUP" = true ] && kubectl -n applications get pvc postgresql-pvc &>/dev/null; then
+    existing_postgres_image=$(kubectl -n applications get deployment postgresql \
+        -o jsonpath='{.spec.template.spec.containers[?(@.name=="postgresql")].image}' 2>/dev/null || true)
+    if [[ "$existing_postgres_image" != postgres:18.* ]]; then
+        echo "  ERROR: --skip-cleanup cannot reuse PostgreSQL data from ${existing_postgres_image:-an older release}." >&2
+        echo "         Migrate the data to PostgreSQL 18, or run --full to recreate the lab volume." >&2
+        exit 1
+    fi
+fi
+
 # --- Cleanup ---
 if [ "$SKIP_CLEANUP" = false ]; then
     echo "Step 2: Cleaning up existing resources..."
@@ -529,8 +540,22 @@ EOF
 echo "  OK: ArgoCD can access Gitea"
 echo ""
 
+# --- Build the sample application image ---
+echo "Step 12: Building the sample Django image..."
+if [[ "$OS" == "Darwin" ]]; then
+    colima --profile "$COLIMA_PROFILE" nerdctl -- build -t "$DJANGO_IMAGE" \
+        --namespace k8s.io "$REPO_DIR/sample-django-app"
+elif command -v nerdctl &>/dev/null; then
+    nerdctl build -t "$DJANGO_IMAGE" --namespace k8s.io "$REPO_DIR/sample-django-app"
+else
+    docker build -t "$DJANGO_IMAGE" "$REPO_DIR/sample-django-app"
+    docker save "$DJANGO_IMAGE" | sudo k3s ctr images import -
+fi
+echo "  OK: Sample Django image built"
+echo ""
+
 # --- Deploy ArgoCD Application ---
-echo "Step 12: Deploying ArgoCD Application..."
+echo "Step 13: Deploying ArgoCD Application..."
 kubectl apply -f "$REPO_DIR/argocd-apps/projects.yaml"
 kubectl apply -f "$REPO_DIR/argocd-apps/django-app.yaml"
 kubectl apply -f "$REPO_DIR/argocd-apps/platform-apps.yaml"
@@ -539,7 +564,7 @@ echo "  OK: ArgoCD Application created"
 echo ""
 
 # --- Wait for Django ---
-echo "Step 13: Waiting for Django to be deployed by ArgoCD..."
+echo "Step 14: Waiting for Django to be deployed by ArgoCD..."
 MAX_WAIT=180
 WAIT_COUNT=0
 while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
@@ -564,7 +589,7 @@ echo ""
 bash "$REPO_DIR/scripts/seed-history.sh" "$GITEA_LOCAL_URL"
 
 # --- Build Scenario Controller Image ---
-echo "Step 14: Building Scenario Controller image..."
+echo "Step 15: Building Scenario Controller image..."
 if [[ "$OS" == "Darwin" ]]; then
     colima --profile "$COLIMA_PROFILE" nerdctl -- build -t "$SCENARIO_CONTROLLER_IMAGE" \
         --namespace k8s.io "$REPO_DIR/scenario-controller" 2>&1 | tail -3
@@ -583,7 +608,7 @@ echo "  OK: Scenario controller image built"
 echo ""
 
 # --- Deploy Scenario Controller ---
-echo "Step 15: Deploying Scenario Controller..."
+echo "Step 16: Deploying Scenario Controller..."
 kubectl apply -f "$REPO_DIR/manifests/applications/scenario-controller.yaml"
 kubectl set image deployment/scenario-controller -n applications controller="$SCENARIO_CONTROLLER_IMAGE" >/dev/null
 kubectl rollout restart deployment/scenario-controller -n applications >/dev/null
@@ -591,7 +616,7 @@ kubectl rollout status deployment/scenario-controller -n applications --timeout=
 echo "  OK: Scenario controller run API deployed; the launcher starts incidents"
 echo ""
 
-echo "Step 16: Building the learning UI services..."
+echo "Step 17: Building the learning UI services..."
 for component in learning-service lab-gateway lab-terminal; do
     case "$component" in
         learning-service) image="$LEARNING_SERVICE_IMAGE" ;;

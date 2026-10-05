@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Argo 3.3 embeds its compiled CSS as string modules in main.js.
+// Argo embeds its compiled CSS as string modules in main.js.
 import {readFileSync, writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {runInNewContext} from 'node:vm';
@@ -140,7 +140,7 @@ const dark = {
   '--coach-shadow': token('dark shadow', [['.theme-dark .popup-overlay .popup-container', 'box-shadow']]),
 };
 const declaration = values => Object.entries(values).map(([name, value]) => `  ${name}: ${value};`).join('\n');
-const generated = `/* Extracted from Argo CD ${version} compiled CSS in main.js.\n * Status colors match Argo; separate text colors meet WCAG AA. */\n:host {\n${declaration(light)}\n}\n:host([data-theme="dark"]) {\n${declaration(dark)}\n}\n`;
+const generated = `/* Argo CD ${version} UI palette; status colors match Argo.\n * Text colors are adjusted to meet WCAG AA. */\n:host {\n${declaration(light)}\n}\n:host([data-theme="dark"]) {\n${declaration(dark)}\n}\n`;
 const committed = readFileSync(outputPath, 'utf8');
 if (committed !== generated) {
   console.error(`Token diff for Argo CD ${version}:`);

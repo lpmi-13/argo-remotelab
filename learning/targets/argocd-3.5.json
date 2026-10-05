@@ -1,5 +1,5 @@
 {
-  "version": "argocd-3.3.7",
+  "version": "argocd-3.5.3",
   "targets": {
     "apps.list": "Applications list and status cards",
     "apps.filter": "Applications list search and filters",

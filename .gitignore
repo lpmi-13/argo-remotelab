@@ -71,6 +71,6 @@ __pycache__/
 scenario-recorder/artifacts/
 
 # Locally cloned django-app (if you clone it into this directory)
-django-app/
+/django-app/
 
 .codex
