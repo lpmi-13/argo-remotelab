@@ -16,6 +16,7 @@
   const demoPatchKey = `argo-coach:demo-patch:${config.session}`;
   const demoFixKey = `argo-coach:demo-fix-started:${config.session}`;
   const demoNarrationKey = `argo-coach:demo-narration:${config.session}`;
+  const demoAttemptsKey = `argo-coach:demo-attempts:${config.session}`;
   let sequence = Number(sessionStorage.getItem(seqKey) || 0);
   let view = JSON.parse(sessionStorage.getItem(initialViewKey) || 'null');
   if (view?.session_id !== config.session) view = null;
@@ -46,6 +47,7 @@
   let pointerTimer = null;
   let demoPatch = JSON.parse(sessionStorage.getItem(demoPatchKey) || 'null');
   let demoNarration = JSON.parse(sessionStorage.getItem(demoNarrationKey) || 'null');
+  let demoAttempts = JSON.parse(sessionStorage.getItem(demoAttemptsKey) || 'null');
   let recentLearning = null;
   let evidenceMapOpen = false;
   let demoPatchOpen = false;
@@ -122,7 +124,7 @@
     clearTimeout(reconnectTimer);
     if (stream) { stream.onclose = null; stream.close(); stream = null; }
     for (const key of ['argo-coach:handoff', 'argo-coach:argocd-landing', startedKey, initialViewKey,
-      seqKey, collapsedKey, demoPatchKey, demoFixKey, demoNarrationKey]) sessionStorage.removeItem(key);
+      seqKey, collapsedKey, demoPatchKey, demoFixKey, demoNarrationKey, demoAttemptsKey]) sessionStorage.removeItem(key);
     location.replace('/');
   }
 
@@ -642,8 +644,9 @@
   }
 
   function visible(element) {
+    if (!element) return false;
     const bounds = element.getBoundingClientRect();
-    return bounds.width > 0 && bounds.height > 0;
+    return bounds.width > 0 && bounds.height > 0 && getComputedStyle(element).visibility !== 'hidden';
   }
 
   function candidate(text) {
@@ -651,6 +654,112 @@
     return Array.from(document.querySelectorAll('button, a, [role="tab"], [role="button"], [title]'))
       .find(element => visible(element) && [element.textContent, element.getAttribute('title'), element.getAttribute('aria-label')]
         .some(value => (value || '').trim().toLowerCase().includes(phrase)));
+  }
+
+  function exactControl(label, scope = document) {
+    const matches = element => [element.textContent, element.getAttribute('aria-label'), element.getAttribute('title')]
+      .some(value => (value || '').trim().toLowerCase() === label.toLowerCase());
+    const control = Array.from(scope.querySelectorAll('button, a, [role="tab"], [role="button"]'))
+      .find(element => visible(element) && matches(element));
+    if (control) return control;
+    const text = Array.from(scope.querySelectorAll('*'))
+      .find(element => element.childElementCount === 0 && visible(element) && matches(element));
+    return text?.closest('button, a, [role="tab"], [role="button"]') || text;
+  }
+
+  function resourceScope() {
+    return Array.from(document.querySelectorAll('.sliding-panel')).find(visible) ||
+      document.querySelector('.application-node-info') || document;
+  }
+
+  function selectedControl(element) {
+    for (let item = element, depth = 0; item && depth < 4; item = item.parentElement, depth += 1) {
+      if (item.matches('[aria-selected="true"], [aria-current="page"], [aria-pressed="true"], [data-state="active"]') ||
+          Array.from(item.classList).some(name => /(?:^|[-_])(active|selected|current)$/.test(name))) return true;
+    }
+    return false;
+  }
+
+  function resourceEvidenceReady(check) {
+    const drawer = document.querySelector('.application-node-info');
+    if (!visible(drawer)) return false;
+    const tab = new URL(location.href).searchParams.get('tab')?.toLowerCase();
+    if (check.target === 'resource.manifest') {
+      const scope = resourceScope();
+      const desired = exactControl('Desired Manifest', scope) || exactControl('Desired', scope);
+      return Boolean(desired && selectedControl(desired) &&
+        Array.from(drawer.querySelectorAll('.application-node-info__manifest--raw')).some(visible));
+    }
+    const label = {'resource.events': 'Events', 'resource.logs': 'Logs', 'resource.summary': 'Summary'}[check.target];
+    const control = exactControl(label, resourceScope());
+    return control ? selectedControl(control) :
+      tab === label.toLowerCase() || (check.target === 'resource.summary' && !tab);
+  }
+
+  function stopDemoAt(check, action) {
+    demoStopped = true;
+    cancelDemoDelay();
+    say(`The demonstration could not open ${action} for ${check.where}. Stop this run and retry.`, true);
+    return false;
+  }
+
+  function countDemoLocationAttempt(check) {
+    const id = `${view.scenario.id}:${check.id}`;
+    demoAttempts = {id, count: demoAttempts?.id === id ? demoAttempts.count + 1 : 1};
+    sessionStorage.setItem(demoAttemptsKey, JSON.stringify(demoAttempts));
+    return demoAttempts.count <= 6 || stopDemoAt(check, check.where);
+  }
+
+  function clearDemoLocationAttempts() {
+    demoAttempts = null;
+    sessionStorage.removeItem(demoAttemptsKey);
+  }
+
+  function markDemoTarget(check) {
+    if (view?.mode !== 'demonstration' || check.available) return;
+    if (typeof observer.visit === 'function') observer.visit(check.target, view.application);
+    else sendAction('target_visited', {target: check.target, application: view.application});
+  }
+
+  const demoContent = {
+    'app.history': '.application-deployment-history',
+    'app.conditions': '.application-conditions',
+    'app.operation': '.application-operation-state__message, .application-operation-state__icons_container_padding',
+    'app.diff': '.application-resources-diff',
+    'app.tree': '.application-resource-tree__node-title',
+  };
+
+  async function waitForDemoContent(target) {
+    const selector = demoContent[target];
+    for (let attempt = 0; attempt < 20 && !demoStopped; attempt += 1) {
+      if (Array.from(document.querySelectorAll(selector)).some(visible)) return true;
+      await sleep(250);
+    }
+    return false;
+  }
+
+  function demoNeedsLocation(check) {
+    if (!check.available || check.target.startsWith('resource.')) return true;
+    if (check.target === 'settings.repos') return !/\/argocd\/settings\/repos(?:itories)?\/?$/.test(location.pathname);
+    if (!location.pathname.includes(`/applications/argocd/${encodeURIComponent(view.application)}`)) return true;
+    const selector = demoContent[check.target];
+    if (selector) return !Array.from(document.querySelectorAll(selector)).some(visible);
+    const appView = {'app.network': 'network', 'app.list': 'list', 'app.pods': 'pods'}[check.target];
+    if (appView) {
+      const selected = (new URL(location.href).searchParams.get('view') || 'tree').toLowerCase() === appView;
+      return !selected && !selectedControl(exactControl(appView));
+    }
+    return false;
+  }
+
+  async function indicateEvidence(check, demonstration) {
+    if (demonstration) markDemoTarget(check);
+    else {
+      const element = evidenceElement(check);
+      if (element) { await scrollToTarget(element); spotlight(element); }
+      say(check.hint || `Read ${check.where}.`);
+    }
+    return true;
   }
 
   function spotlight(element) {
@@ -783,7 +892,7 @@
       (check.target === 'app.tree' ? exact(check.demonstration_answer || '') : null) ||
       historyRevision || history ||
       (check.target === 'settings.repos' ? candidate('gitea.applications.svc.cluster.local') : null) ||
-      document.querySelector(selectors[check.target] || '.__argo_coach_no_match__') ||
+      Array.from(document.querySelectorAll(selectors[check.target] || '.__argo_coach_no_match__')).find(visible) ||
       candidate(({'app.history': 'History', 'app.operation': 'Sync Status',
         'resource.manifest': 'Desired'}[check.target]) || check.target.split('.')[1]);
   }
@@ -813,6 +922,9 @@
     if (!check) { say('Open the affected Application and verify its health and deployed revision.'); return; }
     const target = check.target;
     if (target === 'apps.list' || target === 'apps.filter') {
+      if (demonstration && location.pathname.includes(`/applications/argocd/${encodeURIComponent(view.application)}`)) {
+        return indicateEvidence(check, true);
+      }
       if (!location.pathname.endsWith('/applications')) {
         narrateClick(check, 'Open the Applications list.');
         location.href = '/argocd/applications';
@@ -828,7 +940,10 @@
           if (!card) await sleep(250);
         }
         if (demoStopped) return;
-        if (card) await pointAt(card, true);
+        if (card) {
+          narrateClick(check, `Open the ${view.application} Application from the list.`);
+          await pointAt(card, true);
+        }
         else location.href = `/argocd/applications/argocd/${encodeURIComponent(view.application)}`;
       } else say(check.hint);
       return;
@@ -838,10 +953,9 @@
         narrateClick(check, 'Open Settings → Repositories.');
         location.href = '/argocd/settings/repos';
       } else if (demonstration) {
-        narrateClick(check, 'Read the connected Gitea URL in Repositories.');
         const entry = evidenceElement(check);
-        if (entry) await pointAt(entry);
         observer.fromURL(location.href);
+        if (entry) return indicateEvidence(check, true);
       } else say(check.hint);
       return;
     }
@@ -853,37 +967,80 @@
       location.href = `/argocd/applications/argocd/${encodeURIComponent(view.application)}`;
       return;
     }
+    if (target === 'app.header' && visible(evidenceElement(check))) {
+      return indicateEvidence(check, demonstration);
+    }
     const url = new URL(location.href);
     const panel = {'app.history': ['rollback', '0'], 'app.conditions': ['conditions', 'true'],
       'app.operation': ['operation', 'true']};
     if (panel[target]) {
       const [name, value] = panel[target];
+      if (Array.from(document.querySelectorAll(demoContent[target])).some(visible)) {
+        return indicateEvidence(check, demonstration);
+      }
       if (url.searchParams.get(name) !== value) {
         const label = {'app.history': 'History and Rollback', 'app.conditions': 'Conditions',
           'app.operation': 'Sync Status'}[target];
+        const control = exactControl(label) || candidate(label);
+        if (selectedControl(control)) return false;
         narrateClick(check, `Open ${label} on ${view.application}.`);
-        const control = demonstration && candidate(label);
-        if (control) { await activate(control, true); return; }
+        if (demonstration && control) {
+          await activate(control, true);
+          if (await waitForDemoContent(target)) return indicateEvidence(check, true);
+          return stopDemoAt(check, label);
+        }
         url.searchParams.set(name, value); location.href = url.href; return;
       }
+      return false;
     }
     const appView = {'app.tree': 'tree', 'app.network': 'network', 'app.list': 'list', 'app.pods': 'pods'}[target];
-    if (appView && url.searchParams.get('view')?.toLowerCase() !== appView) {
-      narrateClick(check, `Switch ${view.application} to the ${appView} view.`);
-      const control = demonstration && candidate(appView);
-      if (control) { await activate(control, true); return; }
-      url.searchParams.set('view', appView);
-      location.href = url.href;
-      return;
+    if (appView) {
+      const control = exactControl(appView) || candidate(appView);
+      if ((url.searchParams.get('view') || 'tree').toLowerCase() !== appView && !selectedControl(control)) {
+        narrateClick(check, `Switch ${view.application} to the ${appView} view.`);
+        if (demonstration && control) {
+          await activate(control, true);
+          if (target === 'app.tree') {
+            if (await waitForDemoContent(target)) return indicateEvidence(check, true);
+            return stopDemoAt(check, `${appView} view`);
+          }
+          for (let attempt = 0; attempt < 20 && !demoStopped; attempt += 1) {
+            if ((new URL(location.href).searchParams.get('view') || 'tree').toLowerCase() === appView ||
+                selectedControl(exactControl(appView))) return indicateEvidence(check, true);
+            await sleep(250);
+          }
+          return stopDemoAt(check, `${appView} view`);
+        }
+        url.searchParams.set('view', appView);
+        location.href = url.href;
+        return;
+      }
+      if (visible(evidenceElement(check)) &&
+          (target !== 'app.tree' || Array.from(document.querySelectorAll(demoContent[target])).some(visible))) {
+        return indicateEvidence(check, demonstration);
+      }
+      return false;
     }
     if (target === 'app.diff') {
-      narrateClick(check, `Open Diff on ${view.application}.`);
-      const control = demonstration && candidate('Diff');
-      if (control) { await activate(control, true); return; }
-      url.searchParams.set('node', `argoproj.io/Application/argocd/${view.application}/0`);
-      url.searchParams.set('tab', 'diff');
-      location.href = url.href;
-      return;
+      const control = exactControl('Diff') || candidate('Diff');
+      if (url.searchParams.get('tab') !== 'diff' && url.searchParams.get('view') !== 'diff' &&
+          !selectedControl(control) && !Array.from(document.querySelectorAll(demoContent[target])).some(visible)) {
+        narrateClick(check, `Open Diff on ${view.application}.`);
+        if (demonstration && control) {
+          await activate(control, true);
+          if (await waitForDemoContent(target)) return indicateEvidence(check, true);
+          return stopDemoAt(check, 'Diff');
+        }
+        url.searchParams.set('node', `argoproj.io/Application/argocd/${view.application}/0`);
+        url.searchParams.set('tab', 'diff');
+        location.href = url.href;
+        return;
+      }
+      observer.fromURL(location.href);
+      if (Array.from(document.querySelectorAll(demoContent[target])).some(visible)) {
+        return indicateEvidence(check, demonstration);
+      }
+      return false;
     }
     if (target.startsWith('resource.')) {
       try {
@@ -896,31 +1053,71 @@
         }
         const node = await resourceNode(target);
         if (node) {
-          const title = Array.from(document.querySelectorAll('.application-resource-tree__node-title'))
-            .find(element => element.textContent?.trim() === node.name);
-          if (title) {
-            narrateClick(check, `Open ${node.kind}/${node.name} in ${view.application}'s Tree.`);
-            await activate(title, demonstration);
-            if (target === 'resource.summary') return;
-            const label = {'resource.events': 'Events', 'resource.logs': 'Logs',
-              'resource.manifest': 'Manifest'}[target];
-            for (let attempt = 0; attempt < 20; attempt += 1) {
-              const tab = candidate(label) || Array.from(document.querySelectorAll('body *'))
-                .find(element => element.childElementCount === 0 &&
-                  element.textContent?.trim().toLowerCase() === label.toLowerCase() && visible(element));
-              if (tab) {
-                narrateClick(check, `Open ${label} on ${node.kind}/${node.name}.`);
-                await activate(tab, demonstration);
-                return;
+          const nodeSelected = () => new URL(location.href).searchParams.get('node') === node.id;
+          if (!nodeSelected()) {
+            // The tree often contains Service/django and Deployment/django.
+            // A name-only click can open the wrong resource and loop forever.
+            const titles = Array.from(document.querySelectorAll('.application-resource-tree__node-title'))
+              .filter(element => visible(element) && element.textContent?.trim() === node.name);
+            if (titles.length === 1) {
+              narrateClick(check, `Open ${node.kind}/${node.name} in ${view.application}'s Tree.`);
+              await activate(titles[0], demonstration);
+              for (let attempt = 0; attempt < 20 && !nodeSelected() && !demoStopped; attempt += 1) await sleep(250);
+            }
+            if (demoStopped) return false;
+          }
+          if (!nodeSelected()) {
+            const destination = new URL(location.href);
+            destination.searchParams.set('node', node.id);
+            destination.searchParams.set('tab', ({'resource.events': 'events', 'resource.logs': 'logs',
+              'resource.manifest': 'manifest', 'resource.summary': 'summary'})[target]);
+            if (destination.href !== location.href) {
+              narrateClick(check, `Open ${node.kind}/${node.name} in ${view.application}'s Tree.`);
+              location.href = destination.href;
+            }
+            return false;
+          }
+          if (resourceEvidenceReady(check)) return indicateEvidence(check, demonstration);
+          if (target === 'resource.manifest') {
+            const scope = resourceScope();
+            let desired = exactControl('Desired Manifest', scope) || exactControl('Desired', scope);
+            if (!desired) {
+              const manifest = exactControl('Manifest', scope);
+              if (manifest && !selectedControl(manifest)) {
+                narrateClick(check, `Open Manifest on ${node.kind}/${node.name}.`);
+                await activate(manifest, demonstration);
               }
-              await sleep(250);
+              for (let attempt = 0; attempt < 20 && !desired && !demoStopped; attempt += 1) {
+                desired = exactControl('Desired Manifest', resourceScope()) ||
+                  exactControl('Desired', resourceScope());
+                if (!desired) await sleep(250);
+              }
+            }
+            if (desired && !selectedControl(desired)) {
+              narrateClick(check, `Open Desired Manifest on ${node.kind}/${node.name}.`);
+              await activate(desired, demonstration);
+            }
+          } else {
+            const label = {'resource.events': 'Events', 'resource.logs': 'Logs',
+              'resource.summary': 'Summary'}[target];
+            const tab = exactControl(label, resourceScope());
+            if (tab && !selectedControl(tab)) {
+              narrateClick(check, `Open ${label} on ${node.kind}/${node.name}.`);
+              await activate(tab, demonstration);
             }
           }
-          url.searchParams.set('node', node.id);
-          url.searchParams.set('tab', ({'resource.events': 'events', 'resource.logs': 'logs',
+          for (let attempt = 0; attempt < 20 && !demoStopped; attempt += 1) {
+            if (nodeSelected() && resourceEvidenceReady(check)) return indicateEvidence(check, demonstration);
+            await sleep(250);
+          }
+          if (demonstration) return stopDemoAt(check, target === 'resource.manifest' ? 'Desired Manifest' :
+            {'resource.events': 'Events', 'resource.logs': 'Logs', 'resource.summary': 'Summary'}[target]);
+          const destination = new URL(location.href);
+          destination.searchParams.set('node', node.id);
+          destination.searchParams.set('tab', ({'resource.events': 'events', 'resource.logs': 'logs',
             'resource.manifest': 'manifest', 'resource.summary': 'summary'})[target]);
-          location.href = url.href;
-          return;
+          if (destination.href !== location.href) location.href = destination.href;
+          return false;
         }
       } catch (_) { /* Keep the on-screen pointer when the tree is unavailable. */ }
     }
@@ -930,7 +1127,6 @@
     const element = candidate(labels[target] || target.split('.')[1]);
     if (element) {
       if (demonstration) {
-        narrateClick(check, check.demo?.what || `Read ${check.where}.`);
         await pointAt(element);
       }
       else { await scrollToTarget(element); spotlight(element); say(check.hint); }
@@ -957,6 +1153,17 @@
     } catch (reason) { say(reason.message, true); }
   }
 
+  async function showDemoFinding(check) {
+    clearDemoLocationAttempts();
+    const element = evidenceElement(check);
+    if (element) await pointAt(element);
+    if (demoStopped || view.next_check?.id !== check.id) return;
+    setDemoNarration(check.id, 'learning');
+    await demoWait();
+    if (demoStopped || view.next_check?.id !== check.id) return;
+    await answerCheck(check.demonstration_answer);
+  }
+
   async function driveDemo() {
     if (demoBusy || demoStopped || briefOpen || !view || !['READY', 'INVESTIGATING', 'FIXED'].includes(view.state) || view.feedback) return;
     demoBusy = true;
@@ -966,25 +1173,15 @@
       if (demoStopped || view.feedback || !ready() || expectedStep !== demoStepId()) return;
       const check = view.next_check;
       if (check) {
-        setDemoNarration(check.id, 'doing');
-        if (check.id === 'application' && check.target === 'apps.list') {
-          await showLocation(true);
+        if (demoNeedsLocation(check)) {
+          if (!countDemoLocationAttempt(check)) return;
+          const readyNow = await showLocation(true);
           await sending;
           if (!demoStopped) await refresh();
-          return;
-        }
-        if (!check.available) {
-          await showLocation(true);
-          await sending;
-          if (!demoStopped) await refresh();
+          if (readyNow && view.next_check?.id === check.id && view.next_check.available &&
+              check.demonstration_answer) await showDemoFinding(check);
         } else if (check.demonstration_answer) {
-          const element = evidenceElement(check);
-          if (element) await pointAt(element);
-          if (demoStopped) return;
-          setDemoNarration(check.id, 'learning');
-          await demoWait();
-          if (demoStopped || view.next_check?.id !== check.id) return;
-          await answerCheck(check.demonstration_answer);
+          await showDemoFinding(check);
         }
       } else if (!view.fixed && view.scenario.level !== 1 && !demoFixStarted) {
         demoFixStarted = true;

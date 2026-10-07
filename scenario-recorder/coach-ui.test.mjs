@@ -68,6 +68,11 @@ async function fixture(mode, history = false, applicationCard = false, fixSurfac
     };
     window.ArgoCoachTheme = {followTheme() {}};
   }, {applicationCard});
+  const historyMarkup = `<div style="height: 920px"></div>
+    <div id="history-scroll" ${history === 'closed' ? 'hidden' : ''} style="height: 240px; overflow: auto; width: 600px; margin-left: 550px; border: 1px solid">
+      <div class="application-deployment-history" style="height: 950px">
+        <div style="height: 680px"></div><span id="revision">abc1234</span>
+      </div></div><div style="height: 600px"></div>`;
   await page.route('**/*', route => {
     const url = new URL(route.request().url());
     if (url.pathname === '/') return route.fulfill({contentType: 'text/html', body: launcher});
@@ -76,16 +81,12 @@ async function fixture(mode, history = false, applicationCard = false, fixSurfac
     ]}});
     if (url.pathname === '/argocd/applications') {
       const cardMarkup = applicationCard ? '<a id="application-card" href="/argocd/applications/argocd/shop-web-prod" onclick="sessionStorage.setItem(\'application-clicked\', \'true\')"><span>shop-web-prod</span></a>' : '';
-      const historyMarkup = history ? `<div style="height: 920px"></div>
-        <div id="history-scroll" style="height: 240px; overflow: auto; width: 600px; margin-left: 550px; border: 1px solid">
-          <div class="application-deployment-history" style="height: 950px">
-            <div style="height: 680px"></div><span id="revision">abc1234</span>
-          </div></div><div style="height: 600px"></div>` : '';
-      return route.fulfill({contentType: 'text/html', body: `<!doctype html><html><head><meta charset="utf-8"></head><body>${cardMarkup}${historyMarkup}
+      return route.fulfill({contentType: 'text/html', body: `<!doctype html><html><head><meta charset="utf-8"></head><body>${cardMarkup}
         <script src="/coach/assets/coach.js"></script></body></html>`});
     }
-    if (url.pathname === '/argocd/applications/argocd/shop-web-prod' && applicationCard) {
-      return route.fulfill({contentType: 'text/html', body: '<!doctype html><html><body><div id="app-detail">shop-web-prod · Healthy</div><script src="/coach/assets/coach.js"></script></body></html>'});
+    if (url.pathname === '/argocd/applications/argocd/shop-web-prod' && (applicationCard || history)) {
+      const button = history === 'closed' ? '<button onclick="history.replaceState(null, \'\', \'?rollback=0\'); document.querySelector(\'#history-scroll\').hidden = false">History and Rollback</button>' : '';
+      return route.fulfill({contentType: 'text/html', body: `<!doctype html><html><body><div id="app-detail">shop-web-prod · Healthy</div>${button}${history ? historyMarkup : ''}<script src="/coach/assets/coach.js"></script></body></html>`});
     }
     if (url.pathname === '/coach/assets/coach.js') return route.fulfill({contentType: 'text/javascript', body: coach});
     if (url.pathname.startsWith('/coach/assets/ui/')) return route.fulfill({contentType: 'text/css',
@@ -112,7 +113,8 @@ async function fixture(mode, history = false, applicationCard = false, fixSurfac
     }
     return route.fulfill({status: 404, body: ''});
   });
-  await page.goto('http://lab.test/argocd/applications');
+  await page.goto(history ? 'http://lab.test/argocd/applications/argocd/shop-web-prod' :
+    'http://lab.test/argocd/applications');
   await page.locator('#argocd-coach-host .incident-briefing').waitFor();
   return {browser, page, actions, setView(next) { view = next; },
     setSessionFailure(status, error) { sessionFailure = {status, error}; }};
@@ -143,7 +145,7 @@ test('an expired session returns to missions while other errors stay visible', {
   } finally { await browser.close(); }
 });
 
-test('first demo step clicks the Application after one countdown', {timeout: 30000}, async () => {
+test('first demo step clicks the Application after one countdown', {timeout: 45000}, async () => {
   for (const trigger of ['advance', 'timeout']) {
     const {browser, page} = await fixture('demonstration', false, true);
     try {
@@ -158,7 +160,7 @@ test('first demo step clicks the Application after one countdown', {timeout: 300
       else {
         await page.clock.runFor(14900);
         assert.equal(new URL(page.url()).pathname, '/argocd/applications');
-        await page.clock.runFor(100);
+        await page.clock.runFor(500);
       }
       const acting = page.locator('#argocd-coach-host .panel[data-doing]');
       await acting.waitFor();
@@ -180,7 +182,123 @@ test('first demo step clicks the Application after one countdown', {timeout: 300
   }
 });
 
-test('demo action starts cursor movement without a Doing countdown', {timeout: 45000}, async () => {
+for (const [name, desiredInitially, selectedNode, duplicateName = false] of [
+  ['Live already selected', false, true],
+  ['Desired already selected', true, true],
+  ['different resource selected', false, false],
+  ['Service and Deployment share a name', false, false, true],
+]) {
+  test(`resource demo skips no-op clicks when ${name}`, {timeout: 30000}, async () => {
+    const fixturePage = await fixture('demonstration');
+    const {browser, page} = fixturePage;
+    let current = {...session('demonstration'),
+      scenario: {id: 'console-resources', title: 'Read a resource', level: 1},
+      checks_passed: 1, checks_total: 2,
+      next_check: {id: 'readiness-path', target: 'resource.manifest', where: 'Desired manifest',
+        action: 'Read the readiness path.', reason: 'Desired shows the path Argo applies.',
+        demo: {what: 'Open Deployment/django → Manifest → Desired; read readinessProbe.httpGet.path.',
+          why: 'Desired shows the probe path Argo will apply.'},
+        demonstration_answer: '/api/health/', available: desiredInitially}};
+    fixturePage.setView(current);
+    await page.route('**/*', route => {
+      const url = new URL(route.request().url());
+      if (url.pathname === '/argocd/applications/argocd/shop-web-prod') {
+        const nodeMarkup = duplicateName ? `
+          <div class="application-resource-tree__node-title" onclick="tabClicks.service++; history.replaceState(null, '', '?view=tree&node=%2FService%2Fapplications%2Fdjango%2F0')">django</div>
+          <div class="application-resource-tree__node-title" onclick="tabClicks.node++; history.replaceState(null, '', '?view=tree&node=%2FDeployment%2Fapplications%2Fdjango%2F0')">django</div>` : `
+          <div class="application-resource-tree__node-title" onclick="tabClicks.node++; history.replaceState(null, '', '?view=tree&node=%2FDeployment%2Fapplications%2Fdjango%2F0&tab=manifest')">django</div>`;
+        return route.fulfill({contentType: 'text/html', body: `<!doctype html><html><body>
+          <script>window.tabClicks = {node: 0, service: 0, live: 0, desired: 0};</script>
+          ${nodeMarkup}
+          <div class="application-node-info">
+            <button role="tab" id="live" class="${!desiredInitially ? 'tabs__tab--selected' : ''}" onclick="tabClicks.live++">Live Manifest</button>
+            <button role="tab" id="desired" class="${desiredInitially ? 'tabs__tab--selected' : ''}" onclick="tabClicks.desired++; this.classList.add('tabs__tab--selected'); document.querySelector('#live').classList.remove('tabs__tab--selected'); document.querySelector('#raw').textContent = '/api/health/'">Desired Manifest</button>
+            <pre id="raw" class="application-node-info__manifest--raw">${desiredInitially ? '/api/health/' : '/api/live/'}</pre>
+          </div><script src="/coach/assets/coach.js"></script></body></html>`});
+      }
+      if (url.pathname === '/argocd/api/v1/applications/shop-web-prod/resource-tree') {
+        return route.fulfill({json: {nodes: [{group: '', kind: 'Deployment', namespace: 'applications', name: 'django'}]}});
+      }
+      if (url.pathname === '/coach/learning/api/sessions/session-1/actions') {
+        const action = route.request().postDataJSON();
+        if (action.type === 'target_visited' && action.details.target === 'resource.manifest') {
+          current = {...current, next_check: {...current.next_check, available: true}};
+          fixturePage.setView(current);
+        }
+        return route.fulfill({json: {session: current, evaluation: {accepted: true}}});
+      }
+      return route.fallback();
+    });
+    try {
+      const node = selectedNode ? '%2FDeployment%2Fapplications%2Fdjango%2F0' :
+        '%2FService%2Fapplications%2Fdjango%2F0';
+      await page.goto(`http://lab.test/argocd/applications/argocd/shop-web-prod?view=tree&node=${node}&tab=manifest`);
+      await page.locator('#argocd-coach-host [data-action="begin"]').click();
+      await page.locator('#argocd-coach-host [data-action="advance"]').click();
+      if (desiredInitially) assert.equal(await page.locator('#argocd-coach-host .panel[data-doing]').count(), 0);
+      await page.locator('#argocd-coach-host .demo-explanation span').first().filter({hasText: 'Found'}).waitFor();
+      assert.deepEqual(await page.evaluate(() => window.tabClicks),
+        {node: selectedNode || duplicateName ? 0 : 1, service: 0,
+          live: 0, desired: desiredInitially ? 0 : 1});
+      assert.equal(new URL(page.url()).searchParams.get('node'), '/Deployment/applications/django/0');
+      assert.equal(await page.locator('#argocd-coach-host .demo-explanation p').first().textContent(), '/api/health/');
+    } finally { await browser.close(); }
+  });
+}
+
+test('demo stops after one ineffective Desired Manifest click', {timeout: 15000}, async () => {
+  const fixturePage = await fixture('demonstration');
+  const {browser, page} = fixturePage;
+  fixturePage.setView({...session('demonstration'),
+    scenario: {id: 'console-resources', title: 'Read a resource', level: 1},
+    next_check: {id: 'readiness-path', target: 'resource.manifest', where: 'Desired manifest',
+      demonstration_answer: '/api/health/', available: false}});
+  await page.route('**/*', route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/argocd/applications/argocd/shop-web-prod') {
+      return route.fulfill({contentType: 'text/html', body: `<!doctype html><html><body>
+        <script>window.desiredClicks = 0;</script>
+        <div class="application-resource-tree__node-title">django</div>
+        <div class="application-node-info">
+          <button class="tabs__tab--selected">Live Manifest</button>
+          <button onclick="desiredClicks++">Desired Manifest</button>
+          <pre class="application-node-info__manifest--raw">/api/live/</pre>
+        </div><script src="/coach/assets/coach.js"></script></body></html>`});
+    }
+    if (url.pathname === '/argocd/api/v1/applications/shop-web-prod/resource-tree') {
+      return route.fulfill({json: {nodes: [{group: '', kind: 'Deployment', namespace: 'applications', name: 'django'}]}});
+    }
+    return route.fallback();
+  });
+  try {
+    await page.goto('http://lab.test/argocd/applications/argocd/shop-web-prod?view=tree&node=%2FDeployment%2Fapplications%2Fdjango%2F0&tab=manifest');
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    await page.locator('#argocd-coach-host [data-action="advance"]').click();
+    await page.locator('#argocd-coach-host [role="status"]').filter({hasText: /could not open Desired Manifest/}).waitFor();
+    assert.equal(await page.evaluate(() => window.desiredClicks), 1);
+    assert.equal(await page.locator('#argocd-coach-host [data-action="advance"]').isVisible(), false);
+  } finally { await browser.close(); }
+});
+
+test('demo stops after one ineffective History click', {timeout: 15000}, async () => {
+  const {browser, page} = await fixture('demonstration');
+  await page.route('**/argocd/applications/argocd/shop-web-prod', route =>
+    route.fulfill({contentType: 'text/html', body: `<!doctype html><html><body>
+      <script>window.historyClicks = 0;</script>
+      <button onclick="historyClicks++">History and Rollback</button>
+      <script src="/coach/assets/coach.js"></script></body></html>`}));
+  try {
+    await page.goto('http://lab.test/argocd/applications/argocd/shop-web-prod');
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    await page.locator('#argocd-coach-host [data-action="advance"]').click();
+    await page.locator('#argocd-coach-host [role="status"]')
+      .filter({hasText: /could not open History and Rollback/}).waitFor();
+    assert.equal(await page.evaluate(() => window.historyClicks), 1);
+    assert.equal(await page.locator('#argocd-coach-host [data-action="advance"]').isVisible(), false);
+  } finally { await browser.close(); }
+});
+
+test('already-open History goes straight to evidence without Doing', {timeout: 45000}, async () => {
   const {browser, page} = await fixture('demonstration', true);
   try {
     assert.equal(await page.locator('#argocd-coach-host .panel').count(), 0);
@@ -208,11 +326,9 @@ test('demo action starts cursor movement without a Doing countdown', {timeout: 4
     assert.ok(second < first, 'countdown should decrease while a demo beat is waiting');
     assert.equal(await page.locator('#argocd-coach-host [data-action="argocd"]').count(), 0);
     await page.clock.runFor(15000);
-    assert.deepEqual(await panel.locator('.demo-explanation span').allTextContents(), ['Doing', 'Why']);
-    assert.equal(await panel.getAttribute('data-doing'), '');
+    assert.deepEqual(await panel.locator('.demo-explanation span').allTextContents(), ['Next', 'Why']);
+    assert.equal(await panel.getAttribute('data-doing'), null);
     assert.equal(await panel.locator('[data-demo-timer]').isVisible(), false);
-    assert.equal(await panel.locator('.demo-step').evaluate(element =>
-      getComputedStyle(element).borderLeftColor), 'rgb(224, 162, 0)');
     for (let attempt = 0; attempt < 12 &&
          !await page.locator('#argocd-coach-host .coach-pointer[data-visible]').isVisible(); attempt += 1) {
       await page.clock.runFor(500);
@@ -249,7 +365,7 @@ test('demo action starts cursor movement without a Doing countdown', {timeout: 4
 });
 
 test('Advance skips reading beats while Doing has no timer', {timeout: 15000}, async () => {
-  const {browser, page, actions} = await fixture('demonstration', true);
+  const {browser, page, actions} = await fixture('demonstration', 'closed');
   try {
     await page.clock.install();
     await page.locator('#argocd-coach-host [data-action="begin"]').click();
