@@ -18,6 +18,7 @@ LAB_GATEWAY_IMAGE="${LAB_GATEWAY_IMAGE_REPO}:${IMAGE_TAG}"
 LAB_TERMINAL_IMAGE="${LAB_TERMINAL_IMAGE_REPO}:${IMAGE_TAG}"
 DJANGO_IMAGE="${DJANGO_IMAGE_REPO}:${IMAGE_TAG}"
 GITEA_LOCAL_URL="http://localhost:3000"
+K3S_READY_TIMEOUT=15
 
 show_help() {
     echo "Usage: ./deploy-all.sh [OPTIONS]"
@@ -33,6 +34,80 @@ show_help() {
     echo ""
 }
 
+run_privileged() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
+
+require_linux_sudo() {
+    if [ "$(id -u)" -eq 0 ]; then
+        return 0
+    fi
+    if ! sudo -v; then
+        echo "  ERROR: Linux deployment needs sudo access for k3s service and image operations." >&2
+        echo "         Run deploy-all.sh in an interactive terminal and enter your sudo password." >&2
+        return 1
+    fi
+}
+
+import_docker_image_to_k3s() {
+    local image="$1"
+
+    require_linux_sudo
+    if [ "$(id -u)" -eq 0 ]; then
+        docker save "$image" | k3s ctr images import -
+    else
+        docker save "$image" | sudo -n k3s ctr images import -
+    fi
+}
+
+wait_for_k3s_api() {
+    local waited=0
+    local kubectl_output
+    local config_file="${KUBECONFIG:-${HOME}/.kube/config}"
+
+    while true; do
+        if kubectl_output=$(kubectl cluster-info 2>&1); then
+            return 0
+        fi
+        if [[ "$kubectl_output" == *"You must be logged in"* ||
+              "$kubectl_output" == *"the server has asked for the client to provide credentials"* ||
+              "$kubectl_output" == *"Unauthorized"* ||
+              "$kubectl_output" == *"certificate has expired"* ]]; then
+            echo "  ERROR: k3s is running, but kubectl credentials in $config_file were rejected." >&2
+            echo "         MANUAL ACTION REQUIRED: run ./scripts/manual-refresh.sh from the repository root, then rerun deploy-all.sh." >&2
+            return 1
+        fi
+        if [ "$waited" -ge "$K3S_READY_TIMEOUT" ]; then
+            echo "  ERROR: k3s API did not become ready within ${K3S_READY_TIMEOUT}s" >&2
+            printf '%s\n' "$kubectl_output" | tail -1 >&2
+            return 1
+        fi
+        sleep 3
+        waited=$((waited + 3))
+    done
+}
+
+ensure_linux_k3s_running() {
+    if [[ "$PLATFORM" != "linux" ]]; then
+        return 0
+    fi
+
+    if ! systemctl is-active --quiet k3s; then
+        echo "  Starting k3s service..."
+        if ! run_privileged systemctl start k3s; then
+            echo "  ERROR: Could not start k3s service" >&2
+            return 1
+        fi
+        echo "  Waiting for k3s API..."
+    fi
+    wait_for_k3s_api
+    echo "  OK: k3s API reachable"
+}
+
 SKIP_CLEANUP=false
 if (( $# > 1 )); then
     echo "Error: Pass at most one option" >&2
@@ -41,10 +116,11 @@ if (( $# > 1 )); then
 fi
 case "${1:-}" in
   --help|-h) show_help; exit 0 ;;
-  --warm) exec bash "$SCRIPT_DIR/deploy-warm.sh" ;;
-  --full) ;;
-  --skip-cleanup) SKIP_CLEANUP=true ;;
+  --warm) ensure_linux_k3s_running; exec bash "$SCRIPT_DIR/deploy-warm.sh" ;;
+  --full) ensure_linux_k3s_running ;;
+  --skip-cleanup) ensure_linux_k3s_running; SKIP_CLEANUP=true ;;
   "")
+    ensure_linux_k3s_running
     if warm_check_output=$(bash "$SCRIPT_DIR/deploy-warm.sh" --check 2>&1); then
         echo "Existing lab is ready; running warm deployment."
         exec bash "$SCRIPT_DIR/deploy-warm.sh"
@@ -64,14 +140,6 @@ case "${1:-}" in
     exit 2
     ;;
 esac
-
-run_privileged() {
-    if [ "$(id -u)" -eq 0 ]; then
-        "$@"
-    else
-        sudo "$@"
-    fi
-}
 
 get_k3s_node_internal_ip() {
     local node_name="$1"
@@ -125,41 +193,41 @@ update_k3s_ip_config() {
     rm -f "$temp_file" "$next_file"
 }
 
-wait_for_k3s_api() {
-    local waited=0
-
-    while ! kubectl cluster-info &>/dev/null; do
-        if [ $waited -ge 180 ]; then
-            echo "  ERROR: k3s API did not become ready after restart"
-            exit 1
-        fi
-        sleep 3
-        waited=$((waited + 3))
-    done
-}
-
-wait_for_k3s_advertised_ip() {
+wait_for_k3s_ip_repair() {
     local node_name="$1"
     local desired_ip="$2"
     local waited=0
-    local node_ip
-    local endpoint_ip
+    local api_ready=false
+    local node_ready=""
+    local node_ip=""
+    local endpoint_ip=""
 
-    while [ $waited -lt 180 ]; do
-        node_ip=$(get_k3s_node_internal_ip "$node_name")
-        endpoint_ip=$(get_kubernetes_endpoint_ip)
+    while true; do
+        if kubectl cluster-info &>/dev/null; then
+            api_ready=true
+            node_ready=$(kubectl get node "$node_name" \
+                -o jsonpath='{range .status.conditions[?(@.type=="Ready")]}{.status}{end}' 2>/dev/null || true)
+            node_ip=$(get_k3s_node_internal_ip "$node_name")
+            endpoint_ip=$(get_kubernetes_endpoint_ip)
 
-        if [[ "$node_ip" == "$desired_ip" && "$endpoint_ip" == "$desired_ip" ]]; then
-            return 0
+            if [[ "$node_ready" == "True" && "$node_ip" == "$desired_ip" && "$endpoint_ip" == "$desired_ip" ]]; then
+                return 0
+            fi
+        else
+            api_ready=false
         fi
 
+        if [ "$waited" -ge "$K3S_READY_TIMEOUT" ]; then
+            break
+        fi
         sleep 3
         waited=$((waited + 3))
     done
 
-    echo "  ERROR: k3s still advertises node IP '${node_ip:-unknown}' and API endpoint '${endpoint_ip:-unknown}'"
-    echo "         Expected both to be '${desired_ip}'"
-    exit 1
+    echo "  ERROR: k3s IP repair did not become ready within ${K3S_READY_TIMEOUT}s" >&2
+    echo "         API reachable: $api_ready; node Ready: ${node_ready:-unknown}" >&2
+    echo "         Node IP: ${node_ip:-unknown}; API endpoint: ${endpoint_ip:-unknown}; expected: $desired_ip" >&2
+    return 1
 }
 
 refresh_linux_coredns() {
@@ -218,6 +286,27 @@ ensure_traefik_crds() {
     echo "  OK: Traefik CRDs present"
 }
 
+check_api_services_available() {
+    local unavailable
+
+    unavailable=$(kubectl get apiservices -o json | python3 -c '
+import json, sys
+for item in json.load(sys.stdin)["items"]:
+    condition = next((value for value in item.get("status", {}).get("conditions", [])
+                      if value.get("type") == "Available"), {})
+    if condition.get("status") != "True":
+        name = item["metadata"]["name"]
+        reason = condition.get("reason", "unknown reason")
+        print(f"{name}: {reason}")
+')
+    if [[ -n "$unavailable" ]]; then
+        echo "  ERROR: Kubernetes API discovery is unhealthy; namespace deletion may stall." >&2
+        printf '         %s\n' "$unavailable" >&2
+        echo "         Repair the unavailable APIService before rerunning deployment." >&2
+        return 1
+    fi
+}
+
 repair_linux_k3s_ip_if_needed() {
     local desired_ip
     local node_name
@@ -253,10 +342,8 @@ repair_linux_k3s_ip_if_needed() {
     update_k3s_ip_config "$desired_ip"
     run_privileged systemctl restart k3s
 
-    echo "  Waiting for k3s API after restart..."
-    wait_for_k3s_api
-    kubectl wait --for=condition=Ready --timeout=180s "node/$node_name" >/dev/null
-    wait_for_k3s_advertised_ip "$node_name" "$desired_ip"
+    echo "  Waiting up to ${K3S_READY_TIMEOUT}s for k3s to advertise $desired_ip..."
+    wait_for_k3s_ip_repair "$node_name" "$desired_ip"
     echo "  OK: k3s now advertises $desired_ip"
 }
 
@@ -317,6 +404,7 @@ else
         echo "  ERROR: Cannot connect to Kubernetes cluster"
         exit 1
     fi
+    require_linux_sudo
     echo "  OK: kubectl connected"
     repair_linux_k3s_ip_if_needed
     refresh_linux_coredns
@@ -341,6 +429,7 @@ fi
 
 # --- Cleanup ---
 if [ "$SKIP_CLEANUP" = false ]; then
+    check_api_services_available
     echo "Step 2: Cleaning up existing resources..."
     for ns in applications shop-staging argocd; do
         if kubectl get namespace "$ns" &>/dev/null; then
@@ -367,6 +456,11 @@ if [ "$SKIP_CLEANUP" = false ]; then
             sleep 3
             waited=$((waited + 3))
         done
+        if kubectl get namespace "$ns" &>/dev/null; then
+            echo "  ERROR: Namespace $ns is still terminating after 90s; deployment cannot continue." >&2
+            kubectl describe namespace "$ns" >&2 || true
+            exit 1
+        fi
     done
     echo "  OK: Cleanup complete"
 else
@@ -378,6 +472,13 @@ echo ""
 echo "Step 3: Creating namespaces..."
 kubectl apply -f "$REPO_DIR/manifests/applications/namespace.yaml"
 kubectl apply -f "$REPO_DIR/manifests/gitops/argocd-namespace.yaml"
+for ns in applications argocd; do
+    phase=$(kubectl get namespace "$ns" -o jsonpath='{.status.phase}')
+    if [[ "$phase" != "Active" ]]; then
+        echo "  ERROR: Namespace $ns is $phase; deployment cannot continue." >&2
+        exit 1
+    fi
+done
 echo "  OK: Namespaces created"
 echo ""
 
@@ -549,7 +650,7 @@ elif command -v nerdctl &>/dev/null; then
     nerdctl build -t "$DJANGO_IMAGE" --namespace k8s.io "$REPO_DIR/sample-django-app"
 else
     docker build -t "$DJANGO_IMAGE" "$REPO_DIR/sample-django-app"
-    docker save "$DJANGO_IMAGE" | sudo k3s ctr images import -
+    import_docker_image_to_k3s "$DJANGO_IMAGE"
 fi
 echo "  OK: Sample Django image built"
 echo ""
@@ -601,7 +702,7 @@ else
     else
         # Fallback: build with docker and import
         docker build -t "$SCENARIO_CONTROLLER_IMAGE" "$REPO_DIR/scenario-controller"
-        docker save "$SCENARIO_CONTROLLER_IMAGE" | sudo k3s ctr images import -
+        import_docker_image_to_k3s "$SCENARIO_CONTROLLER_IMAGE"
     fi
 fi
 echo "  OK: Scenario controller image built"
@@ -631,7 +732,7 @@ for component in learning-service lab-gateway lab-terminal; do
             --namespace k8s.io "$REPO_DIR"
     else
         docker build -f "$REPO_DIR/$component/Dockerfile" -t "$image" "$REPO_DIR"
-        docker save "$image" | sudo k3s ctr images import -
+        import_docker_image_to_k3s "$image"
     fi
 done
 

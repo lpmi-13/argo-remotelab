@@ -18,9 +18,9 @@ The console contains `shop-web-prod`, `shop-web-staging`, and three healthy plat
 
 ## Run locally
 
-Use an isolated Colima k3s cluster. The deployment script creates or reuses the `argo-remotelab` profile with 4 CPUs and 8 GiB of memory. It uses a temporary kubeconfig scoped to that profile, leaving your active `kubectl` context alone. Set `COLIMA_PROFILE` to use another dedicated profile; use the same value for cleanup.
+On macOS, use an isolated Colima k3s cluster. The deployment script creates or reuses the `argo-remotelab` profile with 4 CPUs and 8 GiB of memory. It uses a temporary kubeconfig scoped to that profile, leaving your active `kubectl` context alone. Set `COLIMA_PROFILE` to use another dedicated profile; use the same value for cleanup. On Linux, the script starts the host k3s service if it is stopped and allows up to 15 seconds for its API to respond before deploying. If the local kubeconfig credentials are rejected, it stops and points to `./scripts/manual-refresh.sh`, which verifies the current k3s credentials and backs up the local kubeconfig before replacing it. Full Linux deployment prompts for sudo before changing lab resources and again if needed before importing Docker images into k3s. If k3s advertises an IP different from the host's current IP, it updates k3s's advertised IPs and allows 15 seconds for the API, node, and Kubernetes endpoint to recover after restarting k3s.
 
-Prerequisites: Colima with k3s and containerd, `kubectl`, `helm`, `age-keygen`, `sops`, `jq`, and Docker or `nerdctl` for local image builds. Local development pins Node 24.21.0 in `.nvmrc` and Python 3.14.8 in `.python-version`; deployment images carry their own runtime pins. The script checks the required tools during setup.
+Prerequisites: Colima with k3s and containerd on macOS, or an installed k3s systemd service on Linux; plus `kubectl`, `helm`, `age-keygen`, `sops`, `jq`, and Docker or `nerdctl` for local image builds. Local development pins Node 24.21.0 in `.nvmrc` and Python 3.14.8 in `.python-version`; deployment images carry their own runtime pins. The script checks the required tools during setup.
 
 ```bash
 bash scripts/deploy-all.sh

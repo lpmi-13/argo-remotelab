@@ -100,7 +100,12 @@ build_image() {
     nerdctl build --namespace k8s.io -f "$dockerfile" -t "$image" "$context"
   else
     docker build -f "$dockerfile" -t "$image" "$context"
-    docker save "$image" | sudo k3s ctr images import -
+    if (( EUID == 0 )); then
+      docker save "$image" | k3s ctr images import -
+    else
+      sudo -v || fail "sudo access is required to import $image into k3s"
+      docker save "$image" | sudo -n k3s ctr images import -
+    fi
   fi
 }
 
