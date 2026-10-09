@@ -420,7 +420,7 @@ echo ""
 if [ "$SKIP_CLEANUP" = true ] && kubectl -n applications get pvc postgresql-pvc &>/dev/null; then
     existing_postgres_image=$(kubectl -n applications get deployment postgresql \
         -o jsonpath='{.spec.template.spec.containers[?(@.name=="postgresql")].image}' 2>/dev/null || true)
-    if [[ "$existing_postgres_image" != postgres:18.* ]]; then
+    if [[ "${existing_postgres_image##*/}" != postgres:18.* ]]; then
         echo "  ERROR: --skip-cleanup cannot reuse PostgreSQL data from ${existing_postgres_image:-an older release}." >&2
         echo "         Migrate the data to PostgreSQL 18, or run --full to recreate the lab volume." >&2
         exit 1

@@ -1,5 +1,4 @@
-# syntax=docker/dockerfile:1
-FROM alpine:3.24.2
+FROM public.ecr.aws/docker/library/alpine:3.24.2
 
 ARG TARGETARCH
 ARG HELM_SECRETS_VERSION=4.7.8

@@ -67,6 +67,38 @@ The controller also retains its older autonomous scenario loop when started with
 
 The iximiuz image exposes the launcher through the `argocd` tab on port `30080`. Its bootstrap uses `scripts/deploy-preloaded-vm.sh`; `scripts/build-rootfs-image.sh` packages the first-party images and manifests for that path.
 
+## Publish an iximiuz rootfs image
+
+After signing in to GHCR with Docker, run one command with a new version tag:
+
+```bash
+bash scripts/publish-rootfs-image.sh v9
+```
+
+The command rebuilds and pushes all six first-party images and the rootfs image
+under that tag. After the rootfs push succeeds, it updates the application image
+references, `scripts/lib/versions.sh`, and
+`playground/iximiuz/manifest.yaml` to use the new tag, then updates the remote
+iximiuz playground with `labctl playground update`. Install `labctl` first;
+the command checks `labctl auth whoami` and runs `labctl auth login` if needed
+before building. If the remote update fails after the push, retry it without
+rebuilding with `bash scripts/publish-rootfs-image.sh --sync-remote`. Use a
+fresh tag for each release so new playground sessions pull the new image.
+
+The rootfs preloads ten Kubernetes images: the six lab images, PostgreSQL,
+Gitea, Argo CD, and Redis. The PostgreSQL and Gitea init containers reuse their
+application images, and the optional Django verification Job reuses the Django
+image. The iximiuz repo-server uses the prebuilt Argo tools image. The separate
+Alpine image in `manifests/gitops/argocd-sops-config.yaml` serves only the local
+full deployment and is not included in the iximiuz rootfs archive.
+
+Gitea is pulled from its publisher's GHCR package. PostgreSQL and the Docker
+Official Image bases use Docker's verified public ECR repositories; Redis uses
+its maintainers' GHCR image, and Argo CD continues to use Quay. The iximiuz
+base, lab images, and published rootfs use GHCR. The rootfs and Argo tools
+Dockerfiles use BuildKit's default frontend, so building them does not fetch
+`docker/dockerfile` from Docker Hub.
+
 ## Checks
 
 ```bash

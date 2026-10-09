@@ -48,7 +48,7 @@ def seed_leftovers(context):
         kubectl(context, "-n", namespace, "create", "configmap", "django-app-missing-config",
                 "--from-literal=lab=temporary")
         kubectl(context, "-n", namespace, "create", "deployment", "django-web",
-                "--image=busybox:1.37.0", "--replicas=0")
+                "--image=public.ecr.aws/docker/library/postgres:18.6", "--replicas=0")
 
 
 def check_no_leftovers(context):

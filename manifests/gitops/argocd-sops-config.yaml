@@ -28,7 +28,7 @@ spec:
     spec:
       initContainers:
       - name: install-helm-secrets
-        image: alpine:3.24.2
+        image: public.ecr.aws/docker/library/alpine:3.24.2
         command:
         - sh
         - -c

@@ -27,7 +27,7 @@ playground:
 
             The SOPS key to use is at /var/lib/argo-remotelab/secrets/local.key
       drives:
-        - source: oci://ghcr.io/lpmi-13/argo-remotelab-k3s-rootfs:v7
+        - source: oci://ghcr.io/lpmi-13/argo-remotelab-k3s-rootfs:v9
           mount: /
           size: 30GiB
       network:

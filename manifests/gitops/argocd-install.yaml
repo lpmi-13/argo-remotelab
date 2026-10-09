@@ -30905,15 +30905,6 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   labels:
-    app.kubernetes.io/component: dex-server
-    app.kubernetes.io/name: argocd-dex-server
-    app.kubernetes.io/part-of: argocd
-  name: argocd-dex-server
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  labels:
     app.kubernetes.io/component: notifications-controller
     app.kubernetes.io/name: argocd-notifications-controller
     app.kubernetes.io/part-of: argocd
@@ -31068,25 +31059,6 @@ rules:
   - get
   - update
   - create
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  labels:
-    app.kubernetes.io/component: dex-server
-    app.kubernetes.io/name: argocd-dex-server
-    app.kubernetes.io/part-of: argocd
-  name: argocd-dex-server
-rules:
-- apiGroups:
-  - ""
-  resources:
-  - secrets
-  - configmaps
-  verbs:
-  - get
-  - list
-  - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -31379,22 +31351,6 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: argocd-applicationset-controller
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  labels:
-    app.kubernetes.io/component: dex-server
-    app.kubernetes.io/name: argocd-dex-server
-    app.kubernetes.io/part-of: argocd
-  name: argocd-dex-server
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: argocd-dex-server
-subjects:
-- kind: ServiceAccount
-  name: argocd-dex-server
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -31702,32 +31658,6 @@ spec:
     targetPort: metrics
   selector:
     app.kubernetes.io/name: argocd-applicationset-controller
----
-apiVersion: v1
-kind: Service
-metadata:
-  labels:
-    app.kubernetes.io/component: dex-server
-    app.kubernetes.io/name: argocd-dex-server
-    app.kubernetes.io/part-of: argocd
-  name: argocd-dex-server
-spec:
-  ports:
-  - appProtocol: TCP
-    name: http
-    port: 5556
-    protocol: TCP
-    targetPort: 5556
-  - name: grpc
-    port: 5557
-    protocol: TCP
-    targetPort: 5557
-  - name: metrics
-    port: 5558
-    protocol: TCP
-    targetPort: 5558
-  selector:
-    app.kubernetes.io/name: argocd-dex-server
 ---
 apiVersion: v1
 kind: Service
@@ -32176,134 +32106,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   labels:
-    app.kubernetes.io/component: dex-server
-    app.kubernetes.io/name: argocd-dex-server
-    app.kubernetes.io/part-of: argocd
-  name: argocd-dex-server
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: argocd-dex-server
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: argocd-dex-server
-    spec:
-      affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - podAffinityTerm:
-              labelSelector:
-                matchLabels:
-                  app.kubernetes.io/part-of: argocd
-              topologyKey: kubernetes.io/hostname
-            weight: 5
-      containers:
-      - command:
-        - /shared/argocd-dex
-        - rundex
-        env:
-        - name: ARGOCD_DEX_SERVER_LOGFORMAT
-          valueFrom:
-            configMapKeyRef:
-              key: dexserver.log.format
-              name: argocd-cmd-params-cm
-              optional: true
-        - name: ARGOCD_DEX_SERVER_LOGLEVEL
-          valueFrom:
-            configMapKeyRef:
-              key: dexserver.log.level
-              name: argocd-cmd-params-cm
-              optional: true
-        - name: ARGOCD_LOG_FORMAT_TIMESTAMP
-          valueFrom:
-            configMapKeyRef:
-              key: log.format.timestamp
-              name: argocd-cmd-params-cm
-              optional: true
-        - name: ARGOCD_DEX_SERVER_DISABLE_TLS
-          valueFrom:
-            configMapKeyRef:
-              key: dexserver.disable.tls
-              name: argocd-cmd-params-cm
-              optional: true
-        - name: DEX_CONTINUE_ON_CONNECTOR_FAILURE
-          valueFrom:
-            configMapKeyRef:
-              key: dexserver.connector.failure.continue
-              name: argocd-cmd-params-cm
-              optional: true
-        image: ghcr.io/dexidp/dex:v2.45.1
-        imagePullPolicy: Always
-        name: dex
-        ports:
-        - containerPort: 5556
-        - containerPort: 5557
-        - containerPort: 5558
-        securityContext:
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-            - ALL
-          readOnlyRootFilesystem: true
-          runAsNonRoot: true
-          runAsUser: 1001
-          seccompProfile:
-            type: RuntimeDefault
-        volumeMounts:
-        - mountPath: /shared
-          name: static-files
-        - mountPath: /tmp
-          name: dexconfig
-        - mountPath: /tls
-          name: argocd-dex-server-tls
-      initContainers:
-      - command:
-        - /bin/cp
-        - -n
-        - /usr/local/bin/argocd
-        - /shared/argocd-dex
-        image: quay.io/argoproj/argocd:v3.5.3
-        imagePullPolicy: Always
-        name: copyutil
-        securityContext:
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-            - ALL
-          readOnlyRootFilesystem: true
-          runAsNonRoot: true
-          seccompProfile:
-            type: RuntimeDefault
-        volumeMounts:
-        - mountPath: /shared
-          name: static-files
-        - mountPath: /tmp
-          name: dexconfig
-      nodeSelector:
-        kubernetes.io/os: linux
-      serviceAccountName: argocd-dex-server
-      volumes:
-      - emptyDir: {}
-        name: static-files
-      - emptyDir: {}
-        name: dexconfig
-      - name: argocd-dex-server-tls
-        secret:
-          items:
-          - key: tls.crt
-            path: tls.crt
-          - key: tls.key
-            path: tls.key
-          - key: ca.crt
-            path: ca.crt
-          optional: true
-          secretName: argocd-dex-server-tls
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  labels:
     app.kubernetes.io/component: notifications-controller
     app.kubernetes.io/name: argocd-notifications-controller
     app.kubernetes.io/part-of: argocd
@@ -32482,7 +32284,7 @@ spec:
             secretKeyRef:
               key: auth
               name: argocd-redis
-        image: public.ecr.aws/docker/library/redis:8.2.3-alpine
+        image: ghcr.io/redis/docker-library-redis:8.2.10-alpine
         imagePullPolicy: Always
         name: redis
         ports:
@@ -33913,36 +33715,6 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/name: argocd-applicationset-controller
-  policyTypes:
-  - Ingress
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  labels:
-    app.kubernetes.io/component: dex-server
-    app.kubernetes.io/name: argocd-dex-server
-    app.kubernetes.io/part-of: argocd
-  name: argocd-dex-server-network-policy
-spec:
-  ingress:
-  - from:
-    - podSelector:
-        matchLabels:
-          app.kubernetes.io/name: argocd-server
-    ports:
-    - port: 5556
-      protocol: TCP
-    - port: 5557
-      protocol: TCP
-  - from:
-    - namespaceSelector: {}
-    ports:
-    - port: 5558
-      protocol: TCP
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: argocd-dex-server
   policyTypes:
   - Ingress
 ---

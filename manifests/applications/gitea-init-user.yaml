@@ -21,7 +21,7 @@ spec:
       # Wait for Gitea to be ready
       initContainers:
       - name: wait-for-gitea
-        image: busybox:1.37.0
+        image: ghcr.io/go-gitea/gitea:28.0.0
         command:
         - sh
         - -c
@@ -41,7 +41,7 @@ spec:
           echo "Gitea health endpoint is responding!"
       containers:
       - name: create-admin
-        image: gitea/gitea:28.0.0
+        image: ghcr.io/go-gitea/gitea:28.0.0
         command:
         - sh
         - -c

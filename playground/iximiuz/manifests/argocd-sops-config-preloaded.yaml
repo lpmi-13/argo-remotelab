@@ -24,7 +24,7 @@ spec:
     spec:
       initContainers:
       - name: install-helm-secrets
-        image: ghcr.io/lpmi-13/argo-remotelab-argocd-tools:v7
+        image: ghcr.io/lpmi-13/argo-remotelab-argocd-tools:v9
         imagePullPolicy: IfNotPresent
         command:
         - sh

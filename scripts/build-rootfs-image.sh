@@ -20,13 +20,10 @@ learning_service_image="${LEARNING_SERVICE_IMAGE_REPO}:${app_image_tag}"
 lab_gateway_image="${LAB_GATEWAY_IMAGE_REPO}:${app_image_tag}"
 lab_terminal_image="${LAB_TERMINAL_IMAGE_REPO}:${app_image_tag}"
 
+# The preloaded VM uses these directly; Argo CD and Redis come from argocd-install.yaml.
 runtime_images=(
   "${POSTGRES_IMAGE}"
   "${GITEA_IMAGE}"
-  "${GITEA_ADMIN_IMAGE}"
-  "${BUSYBOX_IMAGE}"
-  "${ALPINE_IMAGE}"
-  "${CURL_IMAGE}"
 )
 
 first_party_images=(
@@ -153,10 +150,11 @@ copy_dir "${repo_root}/sample-django-app/chart" "${build_context}/sample-django-
 copy_dir "${repo_root}/sample-django-app/platform" "${build_context}/sample-django-app"
 copy_dir "${repo_root}/scripts" "${build_context}"
 
-echo "Syncing copied manifests to image tag ${app_image_tag}..."
+echo "Syncing copied manifests to image tag ${app_image_tag} and rootfs ${rootfs_image}..."
 bash "${repo_root}/scripts/update-version-refs.sh" \
   --repo-root "${build_context}" \
-  --app-image-tag "${app_image_tag}"
+  --app-image-tag "${app_image_tag}" \
+  --rootfs-image "${rootfs_image}"
 
 echo "Saving Kubernetes images into the rootfs build context..."
 docker save -o "${build_context}/playground/iximiuz/k3s-images.tar" \

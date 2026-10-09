@@ -21,7 +21,6 @@ SOURCES = {
         "manifests/applications/postgresql.yaml",
         "manifests/applications/gitea.yaml",
         "manifests/applications/gitea-init-user.yaml",
-        "manifests/applications/gitea-init-repo.yaml",
         "scripts/lib/versions.sh",
         "scripts/deploy-all.sh",
     ),

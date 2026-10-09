@@ -1,4 +1,4 @@
-FROM python:3.14.8-slim-trixie
+FROM public.ecr.aws/docker/library/python:3.14.8-slim-trixie
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

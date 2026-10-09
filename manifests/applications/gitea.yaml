@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
       - name: gitea
-        image: gitea/gitea:28.0.0
+        image: ghcr.io/go-gitea/gitea:28.0.0
         env:
         - name: GITEA__database__DB_TYPE
           value: "postgres"

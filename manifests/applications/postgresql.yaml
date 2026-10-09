@@ -17,7 +17,7 @@ spec:
     spec:
       initContainers:
       - name: reject-old-postgresql-data
-        image: busybox:1.37.0
+        image: public.ecr.aws/docker/library/postgres:18.6
         command:
         - sh
         - -ec
@@ -26,7 +26,7 @@ spec:
             [ -f "$version_file" ] || continue
             data_version="$(cat "$version_file")"
             if [ "$data_version" != "18" ]; then
-              echo "PostgreSQL data is version $data_version at $version_file; migrate it to 18 or run a full lab reset before using postgres:18.6." >&2
+              echo "PostgreSQL data is version $data_version at $version_file; migrate it to 18 or run a full lab reset before using PostgreSQL 18." >&2
               exit 1
             fi
           done
@@ -35,7 +35,7 @@ spec:
           mountPath: /var/lib/postgresql
       containers:
       - name: postgresql
-        image: postgres:18.6
+        image: public.ecr.aws/docker/library/postgres:18.6
         env:
         - name: POSTGRES_DB
           value: "gitea"

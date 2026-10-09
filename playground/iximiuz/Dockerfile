@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 ARG ROOTFS_RELEASE=b3903e8c.1
 
 FROM ghcr.io/iximiuz/labs/rootfs:ubuntu-k3s-server-${ROOTFS_RELEASE}
