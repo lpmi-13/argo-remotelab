@@ -12,6 +12,19 @@ STATE_DIR="/var/lib/argo-remotelab"
 
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 
+log_phase() {
+    printf '%s [deploy] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" >&2
+}
+
+run_phase() {
+    local label="$1"
+    local started_at=$SECONDS
+    shift
+    log_phase "START ${label}"
+    "$@"
+    log_phase "DONE ${label} ($((SECONDS - started_at))s)"
+}
+
 wait_for_k3s_api() {
     for _ in $(seq 1 180); do
         if kubectl get --raw=/readyz >/dev/null 2>&1; then
@@ -63,20 +76,27 @@ set_argocd_admin_password() {
     kubectl -n argocd patch secret argocd-secret --type=merge \
         --patch "{\"stringData\":{\"admin.password\":\"${ARGOCD_ADMIN_PASSWORD_HASH}\",\"admin.passwordMtime\":\"${password_mtime}\",\"accounts.learner.password\":\"${ARGOCD_ADMIN_PASSWORD_HASH}\",\"accounts.learner.passwordMtime\":\"${password_mtime}\"}}" >/dev/null
     kubectl -n argocd delete secret argocd-initial-admin-secret --ignore-not-found=true >/dev/null
-    kubectl -n argocd rollout restart deployment/argocd-server >/dev/null
-    kubectl -n argocd rollout status deployment/argocd-server --timeout=300s >/dev/null
 }
 
 configure_argocd_server_for_vm() {
     kubectl -n argocd patch configmap argocd-cmd-params-cm --type=merge \
         --patch '{"data":{"server.insecure":"true","server.rootpath":"/argocd","server.basehref":"/argocd"}}' >/dev/null
-    kubectl -n argocd rollout restart deployment/argocd-server >/dev/null
-    kubectl -n argocd rollout status deployment/argocd-server --timeout=300s >/dev/null
+}
+
+apply_preloaded_gitea() {
+    bash "${SCRIPT_DIR}/render-preloaded-manifest.sh" gitea \
+        "${LAB_PUBLIC_URL:-http://127.0.0.1:30080}" | kubectl apply -f - >/dev/null
+}
+
+apply_preloaded_gateway() {
+    bash "${SCRIPT_DIR}/render-preloaded-manifest.sh" gateway \
+        | kubectl apply -f - >/dev/null
 }
 
 create_sops_key() {
     local age_key_file="${STATE_DIR}/secrets/local.key"
     local age_public_key
+    local phase_started
 
     mkdir -p "$(dirname "${age_key_file}")"
     rm -f "${age_key_file}"
@@ -84,20 +104,29 @@ create_sops_key() {
     chmod 644 "${age_key_file}"
     age_public_key="$(awk '/public key:/ {print $NF}' "${age_key_file}")"
 
+    phase_started=$SECONDS
+    log_phase "START Argo CD SOPS Secret apply"
     kubectl create secret generic sops-age-key \
         --namespace argocd \
         --from-file=key.txt="${age_key_file}" \
         --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    log_phase "DONE Argo CD SOPS Secret apply ($((SECONDS - phase_started))s)"
 
+    phase_started=$SECONDS
+    log_phase "START applications SOPS Secret apply"
     kubectl create secret generic sops-age-key \
         --namespace applications \
         --from-file=key.txt="${age_key_file}" \
         --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    log_phase "DONE applications SOPS Secret apply ($((SECONDS - phase_started))s)"
 
+    phase_started=$SECONDS
+    log_phase "START SOPS ConfigMap apply"
     kubectl create configmap sops-config \
         --namespace applications \
         --from-literal=age-public-key="${age_public_key}" \
         --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    log_phase "DONE SOPS ConfigMap apply ($((SECONDS - phase_started))s)"
 
     printf '%s\n' "${age_public_key}"
 }
@@ -186,48 +215,77 @@ READMEEOF
     cd "${REPO_DIR}"
 }
 
-echo "Deploying the preloaded iximiuz VM stack..."
-wait_for_k3s_api
+prepare_gitea_repo() {
+    local age_public_key="$1"
 
+    run_phase "PostgreSQL rollout" kubectl -n applications wait --for=condition=available --timeout=300s deployment/postgresql
+    run_phase "Gitea rollout" kubectl -n applications wait --for=condition=available --timeout=300s deployment/gitea
+    run_phase "Gitea user manifest apply" kubectl apply -f "${REPO_DIR}/manifests/applications/gitea-init-user.yaml"
+    run_phase "Gitea user job" kubectl -n applications wait --for=condition=complete --timeout=180s job/gitea-init-user
+    run_phase "Gitea repository initialization" init_gitea_repo "${age_public_key}"
+}
+
+wait_for_gateway_health() {
+    local attempt
+    for attempt in $(seq 1 60); do
+        if curl -fsS http://127.0.0.1:30080/healthz >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+    echo "lab gateway did not become healthy on port 30080" >&2
+    return 1
+}
+
+log_phase "Deploying the preloaded iximiuz VM stack"
+run_phase "k3s API readiness" wait_for_k3s_api
+
+phase_started=$SECONDS
+log_phase "START namespace cleanup"
 cleanup_namespace applications
 cleanup_namespace shop-staging
 cleanup_namespace argocd
 wait_for_namespace_deletion applications
 wait_for_namespace_deletion shop-staging
 wait_for_namespace_deletion argocd
+log_phase "DONE namespace cleanup ($((SECONDS - phase_started))s)"
 
-kubectl apply -f "${REPO_DIR}/manifests/applications/namespace.yaml" >/dev/null
-kubectl apply -f "${REPO_DIR}/manifests/gitops/argocd-namespace.yaml" >/dev/null
+run_phase "applications namespace apply" kubectl apply -f "${REPO_DIR}/manifests/applications/namespace.yaml"
+run_phase "Argo CD namespace apply" kubectl apply -f "${REPO_DIR}/manifests/gitops/argocd-namespace.yaml"
 
+# These workloads can start while Argo CD installs and is configured.
+run_phase "PostgreSQL manifest apply" kubectl apply -f "${REPO_DIR}/manifests/applications/postgresql.yaml"
+run_phase "Gitea manifest apply" apply_preloaded_gitea
+phase_started=$SECONDS
+log_phase "START SOPS key generation and Secret apply"
+age_public_key="$(create_sops_key)"
+log_phase "DONE SOPS key generation and Secret apply ($((SECONDS - phase_started))s)"
+
+prepare_gitea_repo "${age_public_key}" &
+gitea_prepare_pid=$!
+trap 'kill "${gitea_prepare_pid}" 2>/dev/null || true' EXIT
+
+phase_started=$SECONDS
+log_phase "START Argo CD install manifest apply"
 sed 's/imagePullPolicy: Always/imagePullPolicy: IfNotPresent/g' "${REPO_DIR}/manifests/gitops/argocd-install.yaml" \
     | kubectl apply --server-side --force-conflicts -n argocd -f - >/dev/null
-kubectl -n argocd wait --for=condition=available --timeout=300s deployment/argocd-server >/dev/null
+log_phase "DONE Argo CD install manifest apply ($((SECONDS - phase_started))s)"
 
-configure_argocd_server_for_vm
-kubectl apply -f "${REPO_DIR}/manifests/gitops/argocd-learner-rbac.yaml" >/dev/null
-set_argocd_admin_password
+run_phase "Argo CD VM parameters apply" configure_argocd_server_for_vm
+run_phase "Argo CD learner RBAC apply" kubectl apply -f "${REPO_DIR}/manifests/gitops/argocd-learner-rbac.yaml"
+run_phase "Argo CD passwords apply" set_argocd_admin_password
+run_phase "Argo CD SOPS manifest apply" kubectl apply -f "${IXIMIUZ_DIR}/manifests/argocd-sops-config-preloaded.yaml"
+# The command parameters are read from the ConfigMap at container start.
+# Restart once after every setting is present, then wait for the final pod.
+run_phase "Argo CD server restart" kubectl -n argocd rollout restart deployment/argocd-server
 
-age_public_key="$(create_sops_key)"
-kubectl apply -f "${IXIMIUZ_DIR}/manifests/argocd-sops-config-preloaded.yaml" >/dev/null
-kubectl -n argocd rollout status deployment/argocd-repo-server --timeout=300s >/dev/null
-configure_argocd_server_for_vm
+run_phase "Argo CD server rollout" kubectl -n argocd rollout status deployment/argocd-server --timeout=300s
+run_phase "Argo CD repo-server rollout" kubectl -n argocd rollout status deployment/argocd-repo-server --timeout=300s
+run_phase "Gitea repository path" wait "${gitea_prepare_pid}"
+trap - EXIT
 
-kubectl apply -f "${REPO_DIR}/manifests/applications/postgresql.yaml" >/dev/null
-kubectl apply -f "${REPO_DIR}/manifests/applications/gitea.yaml" >/dev/null
-kubectl -n applications wait --for=condition=available --timeout=300s deployment/postgresql >/dev/null
-kubectl -n applications wait --for=condition=available --timeout=300s deployment/gitea >/dev/null
-kubectl -n applications patch deployment gitea --type=strategic \
-    --patch-file "${IXIMIUZ_DIR}/manifests/gitea-hostport.yaml" >/dev/null
-kubectl -n applications set env deployment/gitea \
-    "GITEA__server__ROOT_URL=${LAB_PUBLIC_URL:-http://127.0.0.1:30080}/gitea/" >/dev/null
-kubectl -n applications rollout status deployment/gitea --timeout=300s >/dev/null
-
-kubectl -n applications delete job gitea-init-user --ignore-not-found=true >/dev/null 2>&1 || true
-kubectl apply -f "${REPO_DIR}/manifests/applications/gitea-init-user.yaml" >/dev/null
-kubectl -n applications wait --for=condition=complete --timeout=180s job/gitea-init-user >/dev/null || true
-
-init_gitea_repo "${age_public_key}"
-
+phase_started=$SECONDS
+log_phase "START Argo CD repository Secret apply"
 cat <<EOF | kubectl apply -f - >/dev/null
 apiVersion: v1
 kind: Secret
@@ -242,12 +300,15 @@ stringData:
   username: remotelab
   password: remotelab
 EOF
+log_phase "DONE Argo CD repository Secret apply ($((SECONDS - phase_started))s)"
 
-kubectl apply -f "${REPO_DIR}/argocd-apps/projects.yaml" >/dev/null
-kubectl apply -f "${REPO_DIR}/argocd-apps/django-app.yaml" >/dev/null
-kubectl apply -f "${REPO_DIR}/argocd-apps/platform-apps.yaml" >/dev/null
-bash "${REPO_DIR}/scripts/configure-gitea-webhook.sh" "${GITEA_URL}"
+run_phase "Argo CD projects manifest apply" kubectl apply -f "${REPO_DIR}/argocd-apps/projects.yaml"
+run_phase "Django Applications manifest apply" kubectl apply -f "${REPO_DIR}/argocd-apps/django-app.yaml"
+run_phase "Platform Applications manifest apply" kubectl apply -f "${REPO_DIR}/argocd-apps/platform-apps.yaml"
+run_phase "Gitea webhook configuration" bash "${REPO_DIR}/scripts/configure-gitea-webhook.sh" "${GITEA_URL}"
 
+phase_started=$SECONDS
+log_phase "START initial Django readiness"
 for _ in $(seq 1 36); do
     ready_replicas="$(kubectl -n applications get deployment django -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
     if [[ "${ready_replicas:-0}" -ge 1 ]]; then
@@ -255,19 +316,19 @@ for _ in $(seq 1 36); do
     fi
     sleep 5
 done
-bash "${REPO_DIR}/scripts/seed-history.sh" "${GITEA_URL}"
+log_phase "DONE initial Django readiness ($((SECONDS - phase_started))s)"
+run_phase "release history seeding" bash "${REPO_DIR}/scripts/seed-history.sh" "${GITEA_URL}"
 
-kubectl apply -f "${REPO_DIR}/manifests/applications/scenario-controller.yaml" >/dev/null
-kubectl -n applications rollout status deployment/scenario-controller --timeout=180s >/dev/null
+run_phase "scenario controller manifest apply" kubectl apply -f "${REPO_DIR}/manifests/applications/scenario-controller.yaml"
+run_phase "scenario controller rollout" kubectl -n applications rollout status deployment/scenario-controller --timeout=180s
 
-kubectl apply -f "${REPO_DIR}/manifests/applications/learning-service.yaml" >/dev/null
-kubectl -n applications rollout status deployment/learning-service --timeout=180s >/dev/null
-kubectl apply -f "${REPO_DIR}/manifests/applications/lab-terminal.yaml" >/dev/null
-kubectl -n applications rollout status deployment/lab-terminal --timeout=180s >/dev/null
-kubectl apply -f "${REPO_DIR}/manifests/applications/lab-gateway.yaml" >/dev/null
-kubectl -n applications patch deployment lab-gateway --type=strategic \
-    --patch-file "${IXIMIUZ_DIR}/manifests/lab-gateway-hostport.yaml" >/dev/null
-kubectl -n applications rollout status deployment/lab-gateway --timeout=180s >/dev/null
+run_phase "learning service manifest apply" kubectl apply -f "${REPO_DIR}/manifests/applications/learning-service.yaml"
+run_phase "learning service rollout" kubectl -n applications rollout status deployment/learning-service --timeout=180s
+run_phase "lab terminal manifest apply" kubectl apply -f "${REPO_DIR}/manifests/applications/lab-terminal.yaml"
+run_phase "lab terminal rollout" kubectl -n applications rollout status deployment/lab-terminal --timeout=180s
+run_phase "lab gateway manifest apply" apply_preloaded_gateway
+run_phase "lab gateway rollout" kubectl -n applications rollout status deployment/lab-gateway --timeout=180s
+run_phase "lab gateway health" wait_for_gateway_health
 
 # The launcher creates the first run after the baseline is healthy.
 

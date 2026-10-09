@@ -67,6 +67,16 @@ The controller also retains its older autonomous scenario loop when started with
 
 The iximiuz image exposes the launcher through the `argocd` tab on port `30080`. Its bootstrap uses `scripts/deploy-preloaded-vm.sh`; `scripts/build-rootfs-image.sh` packages the first-party images and manifests for that path.
 
+The VM bootstrap logs UTC start times and durations for image import, manifest
+applies, rollouts, repository setup, history seeding, and gateway readiness.
+Read them with `journalctl -u gitops-lab-bootstrap.service -b -o cat` when
+comparing cold starts. After a successful deployment, it writes
+`/var/lib/argo-remotelab/provisioned-version`. A reboot with the matching
+version waits for the existing workloads and keeps learner state. If recovery
+fails, the service reports the failure and retries without deleting namespaces.
+Bump `provision_version` in the bootstrap script when an image or deployment
+schema change requires a fresh lab build.
+
 ## Publish an iximiuz rootfs image
 
 After signing in to GHCR with Docker, run one command with a new version tag:

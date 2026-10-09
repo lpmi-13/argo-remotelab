@@ -14,7 +14,7 @@ spec:
       serviceAccountName: lab-terminal
       containers:
       - name: terminal
-        image: ghcr.io/lpmi-13/argo-remotelab-lab-terminal:v9
+        image: ghcr.io/lpmi-13/argo-remotelab-lab-terminal:v11
         imagePullPolicy: IfNotPresent
         ports:
         - name: http

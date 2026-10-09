@@ -13,7 +13,7 @@ spec:
     spec:
       containers:
       - name: gateway
-        image: ghcr.io/lpmi-13/argo-remotelab-lab-gateway:v9
+        image: ghcr.io/lpmi-13/argo-remotelab-lab-gateway:v11
         imagePullPolicy: IfNotPresent
         ports:
         - name: http
