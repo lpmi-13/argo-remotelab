@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-readonly DEFAULT_FIRST_PARTY_IMAGE_TAG="v11"
+readonly DEFAULT_FIRST_PARTY_IMAGE_TAG="v12"
 readonly ROOTFS_IMAGE_REPO="ghcr.io/lpmi-13/argo-remotelab-k3s-rootfs"
-readonly DEFAULT_IXIMIUZ_ROOTFS_IMAGE="ghcr.io/lpmi-13/argo-remotelab-k3s-rootfs:v11"
+readonly DEFAULT_IXIMIUZ_ROOTFS_IMAGE="ghcr.io/lpmi-13/argo-remotelab-k3s-rootfs:v12"
 readonly DEFAULT_IXIMIUZ_ROOTFS_RELEASE="b3903e8c.1"
 
 readonly DJANGO_IMAGE_REPO="ghcr.io/lpmi-13/argo-remotelab-django"

@@ -20,7 +20,7 @@ spec:
       serviceAccountName: scenario-controller
       containers:
       - name: controller
-        image: ghcr.io/lpmi-13/argo-remotelab-scenario-controller:v11
+        image: ghcr.io/lpmi-13/argo-remotelab-scenario-controller:v12
         imagePullPolicy: IfNotPresent
         env:
         - name: ARGOCD_SERVER
