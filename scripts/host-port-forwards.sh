@@ -76,6 +76,13 @@ owns_listener() {
   return 1
 }
 
+kubectl_listener() {
+  local pid="$1" details
+  command -v lsof >/dev/null 2>&1 || return 1
+  details="$(lsof -nP -a -p "$pid" -iTCP:"$local_port" -sTCP:LISTEN -Fc 2>/dev/null)" || return 1
+  [[ "$details" == *$'\nckubectl'* ]]
+}
+
 stop_legacy_gitea() {
   local legacy_file=/tmp/argo-remotelab-gitea-pf.pid pid command_line
   [[ -f "$legacy_file" ]] || return 0
@@ -97,7 +104,7 @@ stop_one() {
   fi
   if [[ -f "$pid_file" ]]; then
     pid="$(cat "$pid_file")"
-    if matches_forward "$pid"; then
+    if matches_forward "$pid" || kubectl_listener "$pid"; then
       kill "$pid" 2>/dev/null || true
     fi
     rm -f "$pid_file"
@@ -123,7 +130,7 @@ start_one() {
   fi
   if [[ -f "$pid_file" ]]; then
     pid="$(cat "$pid_file")"
-    if matches_forward "$pid"; then
+    if matches_forward "$pid" || kubectl_listener "$pid"; then
       if forward_ready; then
         echo "  Reusing $resource port-forward on localhost:$local_port"
         return 0
@@ -137,7 +144,7 @@ start_one() {
   if command -v lsof >/dev/null 2>&1; then
     listeners="$(lsof -nP -t -iTCP:"$local_port" -sTCP:LISTEN 2>/dev/null || true)"
     for listener in $listeners; do
-      if matches_forward "$listener" && forward_ready; then
+      if (matches_forward "$listener" || kubectl_listener "$listener") && forward_ready; then
         printf '%s\n' "$listener" > "$pid_file"
         echo "  Reusing $resource port-forward on localhost:$local_port"
         return 0

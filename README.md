@@ -1,5 +1,7 @@
 # Argo RemoteLab
 
+![Console orientation demonstration: the coach opens the shop Application, checks its health, and reads the deployed revision in History](docs/assets/console-orientation.gif)
+
 Argo RemoteLab teaches a new operator to find deployment evidence in the Argo CD console and use that evidence to repair a GitOps release. The [UI plan](WRAPPING_UI_PLAN.md) describes the curriculum and architecture; [Phase 0 findings](docs/WRAPPING_UI_PHASE0.md) record what has been verified against pinned components and what still needs a running lab.
 
 ## Learning modes
@@ -129,3 +131,5 @@ DEMO_ONLY_SCENARIO=missing-configmap KUBE_CONTEXT=colima-argo-remotelab npm run 
 ```
 
 The live scripts reset the shared lab and must run one at a time. `scenario-recorder` checks the real Argo 3.5.3 list and History UI, Guided orientation, light and dark theme following, and versioned coach-panel image baselines. Its `guided` run follows a failure from Argo evidence through a docked-terminal Git push and back to History and debrief. Its `demo` run checks the default mode, replacement of a closed-tab run, the visible cursor and click cue, and automatic orientation completion; `DEMO_ONLY_SCENARIO` checks a full reference repair. After the full Argo CD 3.5.3 upgrade, review the captured panels and run with `UPDATE_BASELINES=1` to create its new visual baselines. The mode matrix uses the controller's reference fix as a fixture for Guided and Challenge; the separate terminal test exercises a learner Git push. See the verification findings for current live results and remaining gates.
+
+To refresh the opening GIF after the lab is ready, install `ffmpeg`, then run `cd scenario-recorder && npm ci && npx playwright install chromium && KUBE_CONTEXT=colima-argo-remotelab npm run readme-demo` (use `KUBE_CONTEXT=default` for a Linux k3s lab). Set `CHROME_EXECUTABLE` to a local Chrome binary instead of installing Playwright Chromium if preferred. The recorder runs **Console orientation** in Demonstration mode, saves the original video and timing in ignored `scenario-recorder/artifacts/`, and writes `docs/assets/console-orientation.gif`. It replaces the current lab run, so run it when no learner is using the shared cluster.
