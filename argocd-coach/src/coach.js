@@ -17,6 +17,7 @@
   const demoFixKey = `argo-coach:demo-fix-started:${config.session}`;
   const demoNarrationKey = `argo-coach:demo-narration:${config.session}`;
   const demoAttemptsKey = `argo-coach:demo-attempts:${config.session}`;
+  const demoPausedKey = `argo-coach:demo-paused:${config.session}`;
   let sequence = Number(sessionStorage.getItem(seqKey) || 0);
   let view = JSON.parse(sessionStorage.getItem(initialViewKey) || 'null');
   if (view?.session_id !== config.session) view = null;
@@ -32,6 +33,7 @@
   let demoBusy = false;
   let demoFixStarted = sessionStorage.getItem(demoFixKey) === 'true';
   let demoStopped = false;
+  let demoPaused = sessionStorage.getItem(demoPausedKey) === 'true';
   let demoTimer = null;
   let demoAdvance = null;
   let demoWaitResolve = null;
@@ -54,6 +56,7 @@
   let terminalOpen = false;
   let terminalMinimized = false;
   let checkInOpen = false;
+  let guidedLocationTasks = 0;
   let sending = Promise.resolve();
   let stream = null;
   let lastStreamMessage = 0;
@@ -91,7 +94,7 @@
     return null;
   }
   const stepClock = new window.GuidedStepClock({
-    isPaused: () => document.hidden || briefOpen || noteOpen || collapsed ||
+    isPaused: () => document.hidden || briefOpen || noteOpen || checkInOpen || guidedLocationTasks > 0 || collapsed ||
       !view || !['READY', 'INVESTIGATING', 'FIXED'].includes(view.state),
     isQuiet: () => !shadow.activeElement?.matches('input, textarea'),
     onDue: stepId => {
@@ -124,7 +127,7 @@
     clearTimeout(reconnectTimer);
     if (stream) { stream.onclose = null; stream.close(); stream = null; }
     for (const key of ['argo-coach:handoff', 'argo-coach:argocd-landing', startedKey, initialViewKey,
-      seqKey, collapsedKey, demoPatchKey, demoFixKey, demoNarrationKey, demoAttemptsKey]) sessionStorage.removeItem(key);
+      seqKey, collapsedKey, demoPatchKey, demoFixKey, demoNarrationKey, demoAttemptsKey, demoPausedKey]) sessionStorage.removeItem(key);
     location.replace('/');
   }
 
@@ -243,7 +246,7 @@
     progress.classList.toggle('working', waiting);
     progress.querySelector('[data-brief-label]').textContent = waiting
       ? 'Preparing the lab. The countdown starts when it is ready.'
-      : 'Demonstration starts automatically in';
+      : demoPaused ? 'Demonstration paused. Time remaining:' : 'Demonstration starts automatically in';
     progress.querySelector('[data-brief-seconds]').hidden = waiting;
     progress.querySelector('[data-brief-seconds]').textContent = `${Math.ceil(remaining / 1000)}s`;
     progress.querySelector('[data-brief-fill]').style.width = `${100 * (1 - remaining / briefDuration)}%`;
@@ -253,13 +256,13 @@
       bar.setAttribute('aria-valuetext', 'Preparing the lab');
     } else {
       bar.setAttribute('aria-valuenow', String(Math.round(100 * (1 - remaining / briefDuration))));
-      bar.setAttribute('aria-valuetext', `${Math.ceil(remaining / 1000)} seconds until demonstration starts`);
+      bar.setAttribute('aria-valuetext', `${Math.ceil(remaining / 1000)} seconds remaining${demoPaused ? '; demonstration paused' : ' until demonstration starts'}`);
     }
   }
 
   function startBriefCountdown() {
     if (!briefOpen || view?.mode !== 'demonstration' || !ready() || view.feedback ||
-        demoStopped || document.hidden || briefDeadline !== null || sessionStorage.getItem(startedKey)) return;
+        demoStopped || demoPaused || document.hidden || briefDeadline !== null || sessionStorage.getItem(startedKey)) return;
     briefDeadline = performance.now() + briefRemaining;
     briefTimer = setTimeout(beginInvestigation, briefRemaining);
     briefTicker = setInterval(updateBriefCountdown, 100);
@@ -268,6 +271,7 @@
 
   function beginInvestigation() {
     if (!ready()) return;
+    if (demoPaused) setDemoPaused(false);
     clearBriefCountdown();
     briefOpen = false;
     sessionStorage.setItem(startedKey, 'true');
@@ -298,16 +302,53 @@
     if (!timer) return;
     timer.hidden = !demoCountdown;
     if (!demoCountdown) return;
-    const remaining = Math.max(0, demoCountdown.deadline - performance.now());
+    const remaining = demoCountdown.deadline === null ? demoCountdown.remaining :
+      Math.max(0, demoCountdown.deadline - performance.now());
+    timer.querySelector('[data-demo-label]').textContent = demoPaused ? 'Paused · next action in' : 'Next action in';
     timer.querySelector('[data-demo-seconds]').textContent = (remaining / 1000).toFixed(1);
     timer.querySelector('[data-demo-fill]').style.width = `${100 * (1 - remaining / demoCountdown.duration)}%`;
+    timer.querySelector('[data-action="advance"]').disabled = demoPaused;
+  }
+
+  function pauseDemoDelay() {
+    if (!demoCountdown || demoCountdown.deadline === null) return;
+    demoCountdown.remaining = Math.max(0, demoCountdown.deadline - performance.now());
+    demoCountdown.deadline = null;
+    clearTimeout(demoTimer);
+    clearInterval(demoCountdownTicker);
+    demoTimer = null;
+    demoCountdownTicker = null;
+    updateDemoCountdown();
+  }
+
+  function resumeDemoDelay() {
+    if (!demoCountdown || demoCountdown.deadline !== null || demoPaused || document.hidden) return;
+    demoCountdown.deadline = performance.now() + demoCountdown.remaining;
+    demoTimer = setTimeout(demoAdvance, demoCountdown.remaining);
+    demoCountdownTicker = setInterval(updateDemoCountdown, 100);
+    updateDemoCountdown();
+  }
+
+  function setDemoPaused(paused) {
+    if (demoPaused === paused) return;
+    demoPaused = paused;
+    sessionStorage.setItem(demoPausedKey, String(paused));
+    if (paused) {
+      pauseBriefCountdown();
+      pauseDemoDelay();
+    }
+    render();
+    if (!paused) {
+      startBriefCountdown();
+      resumeDemoDelay();
+      scheduleDemo();
+    }
   }
 
   function startDemoCountdown(duration) {
     clearInterval(demoCountdownTicker);
-    demoCountdown = {duration, deadline: performance.now() + duration};
+    demoCountdown = {duration, remaining: duration, deadline: null};
     updateDemoCountdown();
-    demoCountdownTicker = setInterval(updateDemoCountdown, 100);
   }
 
   function startDemoDelay(onComplete) {
@@ -317,6 +358,7 @@
     const countdown = demoCountdown;
     const finish = () => {
       if (demoAdvance !== finish) return;
+      if (demoPaused || document.hidden) { pauseDemoDelay(); return; }
       restoreAdvanceFocus = shadow.activeElement?.id === 'demo-advance';
       demoAdvance = null;
       clearTimeout(demoTimer);
@@ -325,7 +367,7 @@
       onComplete();
     };
     demoAdvance = finish;
-    demoTimer = setTimeout(finish, demoAdvanceDelay);
+    resumeDemoDelay();
   }
 
   function demoWait() {
@@ -344,7 +386,7 @@
   }
 
   function scheduleDemo() {
-    if (demoAdvance || demoBusy || demoStopped || briefOpen || view?.mode !== 'demonstration' ||
+    if (demoAdvance || demoBusy || demoStopped || demoPaused || document.hidden || briefOpen || view?.mode !== 'demonstration' ||
         view.feedback || !['READY', 'INVESTIGATING', 'FIXED'].includes(view.state)) return;
     const stepId = demoStepId();
     if (stepId && demoNarration?.id === stepId && demoNarration.phase === 'doing') {
@@ -489,15 +531,38 @@
     const feedback = view.feedback;
     if (!feedback) return '';
     const steps = feedback.debrief_steps || [];
+    const outcome = !feedback.fixed ? 'The deployment still needs repair.' : view.scenario.level === 1
+      ? 'Release evidence verified.' : feedback.durable
+        ? 'The deployment recovered and the repair is in the deployed Git revision.'
+        : 'The deployment recovered, but the repair is not in the deployed Git revision.';
+    const scoreParts = [
+      ['Remediation', 'remediation', 35], ['Console evidence', 'console_evidence', 25],
+      ['Diagnosis', 'diagnosis', 20], ['Operating practice', 'operational_practice', 10],
+      ['Efficiency', 'efficiency', 10],
+    ];
+    const reference = feedback.truth || {};
+    const referenceParts = [['Cause', reference.cause], ['Evidence', reference.evidence], ['Repair', reference.fix]]
+      .filter(([, value]) => value);
+    const hints = Number(feedback.assistance?.hints || 0);
+    const demonstrations = Number(feedback.assistance?.show_me || 0);
     const replay = new URLSearchParams({scenario: view.scenario.id, mode: view.mode, environment: view.environment});
     const sameSeed = new URLSearchParams(replay);
     if (view.seed != null) sameSeed.set('seed', String(view.seed));
     const lessHelp = new URLSearchParams(replay);
     lessHelp.set('mode', view.mode === 'demonstration' ? 'guided' : 'challenge');
     return `<div class="debrief-content"><h2 id="debrief-title">Debrief${feedback.total == null ? '' : ` · ${escape(feedback.total)} / 100`}</h2>
+      <p class="debrief-outcome">${escape(outcome)}</p>
       ${steps.length ? `<ol class="debrief-steps" aria-label="Steps taken and what we learned">${steps.map(step =>
         `<li><strong>${escape(step.action)}</strong><p>${escape(step.finding)}</p></li>`).join('')}</ol>`
         : '<p class="muted">No steps were recorded for this run.</p>'}
+      ${feedback.total != null && feedback.breakdown ? `<details class="debrief-detail"><summary>How the score was calculated</summary>
+        <dl>${scoreParts.map(([label, key, maximum]) => `<div><dt>${label}</dt><dd>${escape(feedback.breakdown[key] ?? 0)} / ${maximum}</dd></div>`).join('')}</dl>
+        ${feedback.fixed ? '' : '<p class="small muted">An unrepaired deployment can earn at most 50 points.</p>'}</details>` : ''}
+      ${view.mode === 'challenge' && referenceParts.length ? `<details class="debrief-detail"><summary>Reference finding</summary>
+        <dl>${referenceParts.map(([label, value]) => `<div><dt>${label}</dt><dd>${escape(value)}</dd></div>`).join('')}</dl></details>` : ''}
+      ${view.mode !== 'demonstration' && feedback.practice_notes?.length ? `<div class="debrief-practice"><strong>Operating habits</strong>
+        <ul>${feedback.practice_notes.map(note => `<li>${escape(note)}</li>`).join('')}</ul></div>` : ''}
+      ${view.mode === 'guided' && feedback.assistance ? `<p class="debrief-assistance">Help used: ${hints} ${hints === 1 ? 'hint' : 'hints'} · ${demonstrations} ${demonstrations === 1 ? 'demonstration' : 'demonstrations'}</p>` : ''}
       <div class="actions"><a class="secondary" href="/?${escape(sameSeed)}">Replay same key</a>
         <a class="secondary" href="/?${escape(replay)}">New key</a>
         ${view.mode !== 'challenge' && view.scenario.level !== 1 ? `<a class="secondary" href="/?${escape(lessHelp)}">Less help</a>` : ''}
@@ -529,7 +594,7 @@
         <div class="brief-progress-copy"><span data-brief-label></span><strong data-brief-seconds></strong></div>
         <div class="brief-progress-track" role="progressbar" aria-label="Automatic demonstration start" aria-valuemin="0" aria-valuemax="100"><span data-brief-fill></span></div>
       </div>` : !ready() ? '<p class="brief-waiting">Preparing the lab. The investigation can begin when it is ready.</p>' : ''}
-      <div class="brief-footer">${autoStart ? '<button class="secondary" data-action="stop">Stop</button>' : ''}
+      <div class="brief-footer">${autoStart ? `<button class="secondary" data-action="pause-demo">${demoPaused ? 'Resume' : 'Pause'}</button><button class="secondary" data-action="stop">Stop</button>` : ''}
         <button class="primary" data-action="begin" ${ready() ? '' : 'disabled'}>${started ? 'Return to investigation' : autoStart ? 'Start now' : 'Begin investigation'}</button></div>
     </div></div>`;
   }
@@ -589,7 +654,7 @@
     const body = preparing ? `<p>Preparing the environment and waiting for Argo CD to show the incident…</p>`
       : view.state === 'FAILED' ? `<p class="message error">${escape(view.run_error || 'The run could not start.')}</p>`
       : view.state === 'ABORTED' ? '<p>The run was stopped.</p><a class="secondary" href="/">Return to missions</a>'
-      : `${view.mode === 'demonstration' ? '<p class="driving">✦ Demo running</p>' : ''}
+      : `${view.mode === 'demonstration' ? `<p class="driving">✦ Demo ${demoPaused ? 'paused' : 'running'}</p>` : ''}
          <h2>${escape(view.briefing?.headline || view.scenario.title)}</h2>
          ${view.alert ? `<div class="message error" role="alert">${escape(view.alert.message)}</div>` : ''}
          ${checkInCard()} ${recentLearning ? learningCard() : checkCard()} ${demoPatchCard()} ${targetList()}
@@ -606,6 +671,7 @@
     root.innerHTML = `<aside class="panel" ${collapsed ? 'data-collapsed' : ''} ${doing ? 'data-doing' : ''} aria-label="Argo CD Coach">
       <div class="header panel-controls">
       ${view.mode === 'demonstration' && !['ABORTED', 'COMPLETED', 'FAILED'].includes(view.state) ? '<button class="secondary stop-button" data-action="stop" aria-label="Stop demonstration">Stop</button>' : ''}
+      ${view.mode === 'demonstration' && !['ABORTED', 'COMPLETED', 'FAILED'].includes(view.state) ? `<button class="secondary stop-button" data-action="pause-demo" aria-label="${demoPaused ? 'Resume' : 'Pause'} demonstration">${demoPaused ? 'Resume' : 'Pause'}</button>` : ''}
       <button class="icon-button" data-action="collapse" aria-label="${collapsed ? 'Expand' : 'Collapse'} coach">${collapsed ? '▣' : '−'}</button></div>
       ${collapsed ? '' : `<div class="body">${body}${message ? `<div class="message ${error ? 'error' : ''}" role="status">${escape(message)}</div>` : ''}${view.mode === 'demonstration' ? demoTimerMarkup() : ''}</div>`}
     </aside>${noteOpen ? noteForm() : ''}`;
@@ -918,6 +984,12 @@
   }
 
   async function showLocation(demonstration = false) {
+    if (!demonstration) guidedLocationTasks += 1;
+    try { return await showLocationImpl(demonstration); }
+    finally { if (!demonstration) guidedLocationTasks -= 1; }
+  }
+
+  async function showLocationImpl(demonstration) {
     const check = view?.next_check;
     if (!check) { say('Open the affected Application and verify its health and deployed revision.'); return; }
     const target = check.target;
@@ -1227,7 +1299,8 @@
     if (!action) return;
     if (action === 'retry-session') refresh();
     else if (action === 'begin') beginInvestigation();
-    else if (action === 'advance') demoAdvance?.();
+    else if (action === 'advance' && !demoPaused) demoAdvance?.();
+    else if (action === 'pause-demo') setDemoPaused(!demoPaused);
     else if (action === 'continue-step') { recentLearning = null; render(); scheduleDemo(); }
     else if (action.startsWith('checkin-')) {
       const choice = action.slice('checkin-'.length);
@@ -1338,8 +1411,14 @@
   addEventListener('pointerdown', () => stepClock.input(), {passive: true});
   addEventListener('keydown', () => stepClock.input(), {passive: true});
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) pauseBriefCountdown();
-    else startBriefCountdown();
+    if (document.hidden) {
+      pauseBriefCountdown();
+      pauseDemoDelay();
+    } else {
+      startBriefCountdown();
+      resumeDemoDelay();
+      scheduleDemo();
+    }
     updateBriefCountdown();
   });
 
@@ -1351,7 +1430,7 @@
   // navigation. Reconcile from HTTP after a quiet period instead of leaving
   // the evidence map stale until another action occurs.
   setInterval(() => {
-    if (!document.hidden && !view?.feedback && stream?.readyState === WebSocket.OPEN &&
+    if (!document.hidden && !view?.feedback && window.WebSocket && stream?.readyState === WebSocket.OPEN &&
         Date.now() - lastStreamMessage > 12000) refresh();
   }, 12000);
 })();

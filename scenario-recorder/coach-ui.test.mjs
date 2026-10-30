@@ -10,6 +10,9 @@ const preparationPage = await readFile(new URL('../lab-launcher/preparing.html',
 const styles = new Map(await Promise.all(['tokens.css', 'coach.css'].map(async name =>
   [name, await readFile(new URL(`../argocd-coach/src/ui/${name}`, import.meta.url), 'utf8')])));
 
+const launchBrowser = () => chromium.launch({headless: true,
+  ...(process.env.CHROME_EXECUTABLE ? {executablePath: process.env.CHROME_EXECUTABLE} : {})});
+
 function session(mode) {
   return {
     session_id: 'session-1', run_id: 'run-1', mode, state: 'READY',
@@ -30,7 +33,7 @@ function session(mode) {
 }
 
 async function fixture(mode, history = false, applicationCard = false, fixSurface = 'none') {
-  const browser = await chromium.launch({headless: true});
+  const browser = await launchBrowser();
   const page = await browser.newPage({viewport: {width: 1200, height: 750}});
   let view = {...session(mode), fix_surface: fixSurface};
   if (applicationCard) view = {...view,
@@ -390,8 +393,64 @@ test('Advance skips reading beats while Doing has no timer', {timeout: 15000}, a
   } finally { await browser.close(); }
 });
 
+test('demo pause holds the current reading beat and survives a page reload', {timeout: 20000}, async () => {
+  const {browser, page} = await fixture('demonstration', true);
+  try {
+    await page.clock.install();
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    await page.clock.runFor(4000);
+    await page.locator('#argocd-coach-host .panel [data-action="pause-demo"]').click();
+    const remaining = Number(await page.locator('#argocd-coach-host [data-demo-seconds]').innerText());
+    await page.clock.runFor(20000);
+    assert.equal(await page.locator('#argocd-coach-host .demo-explanation span').first().textContent(), 'Next');
+    assert.ok(Math.abs(Number(await page.locator('#argocd-coach-host [data-demo-seconds]').innerText()) - remaining) < 0.2);
+    assert.equal(await page.locator('#argocd-coach-host [data-action="advance"]').isDisabled(), true);
+
+    await page.reload();
+    await page.locator('#argocd-coach-host .panel [data-action="pause-demo"]').waitFor();
+    assert.equal(await page.locator('#argocd-coach-host .panel [data-action="pause-demo"]').textContent(), 'Resume');
+    await page.clock.runFor(20000);
+    assert.equal(await page.locator('#argocd-coach-host .demo-explanation span').first().textContent(), 'Next');
+    await page.locator('#argocd-coach-host .panel [data-action="pause-demo"]').click();
+    assert.equal(await page.locator('#argocd-coach-host [data-action="advance"]').isDisabled(), false);
+    await page.locator('#argocd-coach-host [data-action="advance"]').click();
+    for (let attempt = 0; attempt < 16 &&
+         await page.locator('#argocd-coach-host .demo-explanation span').first().textContent() !== 'Found'; attempt += 1) {
+      await page.clock.runFor(500);
+    }
+    assert.equal(await page.locator('#argocd-coach-host .demo-explanation span').first().textContent(), 'Found');
+  } finally { await browser.close(); }
+});
+
+test('hiding the tab freezes the demo countdown until it is visible again', {timeout: 15000}, async () => {
+  const {browser, page} = await fixture('demonstration', true);
+  try {
+    await page.clock.install();
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    await page.clock.runFor(3000);
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', {configurable: true, value: true});
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    const remaining = Number(await page.locator('#argocd-coach-host [data-demo-seconds]').innerText());
+    await page.clock.runFor(20000);
+    assert.ok(Math.abs(Number(await page.locator('#argocd-coach-host [data-demo-seconds]').innerText()) - remaining) < 0.2);
+    assert.equal(await page.locator('#argocd-coach-host .demo-explanation span').first().textContent(), 'Next');
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', {configurable: true, value: false});
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.clock.runFor(remaining * 1000 + 100);
+    for (let attempt = 0; attempt < 16 &&
+         await page.locator('#argocd-coach-host .demo-explanation span').first().textContent() !== 'Found'; attempt += 1) {
+      await page.clock.runFor(500);
+    }
+    assert.equal(await page.locator('#argocd-coach-host .demo-explanation span').first().textContent(), 'Found');
+  } finally { await browser.close(); }
+});
+
 test('launcher keeps Argo CD closed until the scenario is ready, then starts the briefing countdown', {timeout: 30000}, async () => {
-  const browser = await chromium.launch({headless: true});
+  const browser = await launchBrowser();
   const page = await browser.newPage();
   const preparing = {...session('demonstration'), state: 'RESETTING',
     run_updated_at: '2026-10-05T12:00:00Z'};
@@ -510,7 +569,7 @@ test('launcher keeps Argo CD closed until the scenario is ready, then starts the
 });
 
 test('failed preparation stays on the loading page and offers a return to missions', {timeout: 15000}, async () => {
-  const browser = await chromium.launch({headless: true});
+  const browser = await launchBrowser();
   const page = await browser.newPage();
   let argoRequests = 0;
   try {
@@ -585,7 +644,9 @@ test('terminal minimizes without remounting, resizes, and debrief is centered', 
       JSON.stringify({before, after}));
 
     fixturePage.setView({...session('guided'), state: 'COMPLETED', feedback: {
-      message: 'Run complete.', total: 100, breakdown: {},
+      message: 'Run complete.', total: null, fixed: true, durable: true,
+      assistance: {hints: 1, show_me: 0},
+      practice_notes: ['No unsafe operation was observed.'],
       debrief_steps: [
         {action: 'We opened shop-web-prod.', finding: 'It is the prod release.'},
         {action: 'We opened History and Rollback.', finding: 'Argo deployed revision abc1234.'},
@@ -599,11 +660,39 @@ test('terminal minimizes without remounting, resizes, and debrief is centered', 
       'We opened History and Rollback.Argo deployed revision abc1234.',
     ]);
     assert.equal(await page.locator('#argocd-coach-host .debrief-content h3').count(), 0);
+    assert.equal(await page.locator('#argocd-coach-host .debrief-outcome').textContent(), 'Release evidence verified.');
+    assert.match(await page.locator('#argocd-coach-host .debrief-practice').innerText(), /No unsafe operation/);
+    assert.equal(await page.locator('#argocd-coach-host .debrief-assistance').textContent(),
+      'Help used: 1 hint · 0 demonstrations');
     assert.equal(await page.locator('#argocd-coach-host .debrief-steps li').first()
       .evaluate(element => getComputedStyle(element).borderWidth), '0px');
     assert.equal(await page.locator('#argocd-coach-host a[href^="/?scenario="]').count(), 2);
     const modal = await page.locator('#argocd-coach-host .debrief-modal').boundingBox();
     assert.ok(Math.abs(modal.x + modal.width / 2 - 600) < 2, JSON.stringify(modal));
     assert.ok(Math.abs(modal.y + modal.height / 2 - 375) < 2, JSON.stringify(modal));
+  } finally { await browser.close(); }
+});
+
+test('challenge debrief reveals score components and the reference finding', {timeout: 15000}, async () => {
+  const fixturePage = await fixture('challenge');
+  const {browser, page} = fixturePage;
+  try {
+    fixturePage.setView({...session('challenge'), state: 'COMPLETED', feedback: {
+      total: 82, fixed: true, durable: false,
+      breakdown: {remediation: 20, console_evidence: 23, diagnosis: 19, operational_practice: 10, efficiency: 10},
+      truth: {cause: 'A missing ConfigMap', evidence: 'CreateContainerConfigError', fix: 'Restore the reference in Git'},
+      practice_notes: ['The fix is not reflected in the deployed Git revision.'],
+      debrief_steps: [],
+    }});
+    await page.reload();
+    await page.locator('#argocd-coach-host .debrief-modal').waitFor();
+    assert.match(await page.locator('#argocd-coach-host .debrief-outcome').textContent(), /repair is not in the deployed Git revision/);
+    const score = page.locator('#argocd-coach-host .debrief-detail').first();
+    await score.locator('summary').click();
+    assert.match(await score.innerText(), /Remediation\s+20 \/ 35/);
+    const reference = page.locator('#argocd-coach-host .debrief-detail').nth(1);
+    await reference.locator('summary').click();
+    assert.match(await reference.innerText(), /Cause\s+A missing ConfigMap/);
+    assert.match(await page.locator('#argocd-coach-host .debrief-practice').innerText(), /not reflected/);
   } finally { await browser.close(); }
 });

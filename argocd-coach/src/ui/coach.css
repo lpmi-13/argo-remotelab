@@ -83,12 +83,24 @@ a.secondary { display: inline-flex; align-items: center; padding: var(--coach-bu
 .modal .mark { margin-bottom: 8px; }
 .debrief-modal { width: min(620px, calc(100vw - 28px)); padding: 24px; }
 .debrief-content h2 { font-size: 24px; }
+.debrief-outcome { margin: 0; font-size: 15px; line-height: 1.45; }
 .debrief-steps { margin: 17px 0 0; padding-left: 25px; }
 .debrief-steps li { padding-left: 5px; }
 .debrief-steps li + li { margin-top: 14px; }
 .debrief-steps li::marker { color: var(--coach-accent-text); font-weight: 700; }
 .debrief-steps strong { display: block; font-weight: 600; }
 .debrief-steps p { margin: 2px 0 0; color: var(--coach-muted); }
+.debrief-detail { margin-top: 17px; border-top: 1px solid var(--coach-border); padding-top: 12px; }
+.debrief-detail summary { cursor: pointer; color: var(--coach-accent-text); font-weight: 700; }
+.debrief-detail summary:focus-visible { outline: 2px solid var(--coach-accent); outline-offset: 2px; }
+.debrief-detail dl { margin: 10px 0 0; }
+.debrief-detail dl div { display: flex; justify-content: space-between; gap: 14px; padding: 5px 0; }
+.debrief-detail dt { color: var(--coach-muted); }
+.debrief-detail dd { margin: 0; text-align: right; font-weight: 600; }
+.debrief-practice { margin-top: 17px; border-top: 1px solid var(--coach-border); padding-top: 12px; }
+.debrief-practice ul { margin: 6px 0 0; padding-left: 20px; }
+.debrief-practice li + li { margin-top: 5px; }
+.debrief-assistance { margin: 12px 0 0; color: var(--coach-muted); font-size: 12px; }
 .debrief-content .actions { margin-top: 20px; }
 .incident-briefing { width: min(620px, calc(100vw - 28px)); padding: 0; border-left: 0; }
 .brief-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 24px;

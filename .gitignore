@@ -69,6 +69,7 @@ node_modules/
 __pycache__/
 *.pyc
 scenario-recorder/artifacts/
+scenario-recorder/.playwright-cli/
 
 # Locally cloned django-app (if you clone it into this directory)
 /django-app/
