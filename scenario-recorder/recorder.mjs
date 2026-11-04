@@ -267,7 +267,6 @@ async function main() {
     }
     for (const [question, answer] of [
       ['Which Application matches the briefing?', 'shop-web-prod'],
-      ['What health status does the application header show?', 'Healthy'],
       ['Which Git revision is deployed?', shortRevision],
     ]) {
       await page.locator('#argocd-coach-host .card strong').filter({hasText: question})
@@ -277,7 +276,7 @@ async function main() {
     }
     await page.locator('#argocd-coach-host .debrief-modal #debrief-title').waitFor({timeout: 30_000});
     const completed = await api(sessionPath, {headers: sessionAuth});
-    if (completed.state !== 'COMPLETED' || completed.checks_passed !== 3) {
+    if (completed.state !== 'COMPLETED' || completed.checks_passed !== 2) {
       throw new Error(`Guided orientation did not complete: ${JSON.stringify(completed)}`);
     }
     if (errors.some(error => /coach|websocket/i.test(error))) {

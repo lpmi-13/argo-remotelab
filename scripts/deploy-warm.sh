@@ -207,8 +207,6 @@ done
 age_public_key="$(age-keygen -y "$key_file")"
 kubectl -n argocd get application shop-web-prod shop-web-staging >/dev/null ||
   fail "shop Applications are missing"
-start_forward scenario-controller 8092 /healthz
-controller_url="$forward_url"
 start_forward gitea 3000 /api/healthz
 gitea_url="$forward_url"
 GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code \
@@ -217,10 +215,18 @@ GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code \
   fail "Gitea baseline tag is missing"
 echo "  OK: Existing Kubernetes services and SOPS key are ready"
 if [[ "$check_only" == true ]]; then
+  start_forward scenario-controller 8092 /healthz
   exit 0
 fi
 
-echo "Step 2: Resetting the lab to its baseline..."
+recorded_tag="$(kubectl -n argocd get configmap remotelab-deploy-state \
+  -o jsonpath='{.data.image_tag}' 2>/dev/null || true)"
+echo "Step 2: Updating the scenario controller..."
+deploy_component scenario-controller "${SCENARIO_CONTROLLER_IMAGE_REPO}:$image_tag" controller true
+start_forward scenario-controller 8092 /healthz
+controller_url="$forward_url"
+
+echo "Step 3: Resetting the lab to its baseline..."
 created="$(curl -fsS -X POST -H 'Content-Type: application/json' \
   --data '{"scenario":"console-orientation","environment":"prod","replace_existing":true}' \
   "$controller_url/api/runs")"
@@ -290,10 +296,7 @@ if [[ "$django_rebuilt" == true ]]; then
   done
 fi
 
-echo "Step 3: Updating changed first-party images..."
-recorded_tag="$(kubectl -n argocd get configmap remotelab-deploy-state \
-  -o jsonpath='{.data.image_tag}' 2>/dev/null || true)"
-deploy_component scenario-controller "${SCENARIO_CONTROLLER_IMAGE_REPO}:$image_tag" controller true
+echo "Step 4: Updating changed first-party images..."
 deploy_component learning-service "${LEARNING_SERVICE_IMAGE_REPO}:$image_tag" learning-service true
 deploy_component lab-terminal "${LAB_TERMINAL_IMAGE_REPO}:$image_tag" terminal false
 deploy_component lab-gateway "${LAB_GATEWAY_IMAGE_REPO}:$image_tag" gateway false

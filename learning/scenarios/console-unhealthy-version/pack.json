@@ -1,0 +1,13 @@
+{
+  "id": "console-unhealthy-version", "title": "Check an unhealthy release", "level": 1,
+  "brief": "Find the affected shop Application. Read its health status and use History to identify the deployed revision.",
+  "fix_surface": "none", "fix_paths": [],
+  "targets": ["apps.list", "app.header", "app.history"],
+  "checks": [
+    {"id": "application", "target": "apps.list", "question": "Which Application is unhealthy?", "answer": "${application}", "hint": "Find the shop Application for the selected environment.", "why": "The Applications list identifies which release needs inspection."},
+    {"id": "health", "target": "app.header", "question": "What health status does this Application show?", "answer": "${health}", "hint": "Read the health badge in the Application header.", "why": "Health shows whether the deployed workload is ready."},
+    {"id": "revision", "target": "app.history", "question": "Which Git revision is deployed on this unhealthy service?", "answer": "${revision}", "hint": "Open History and Rollback and read the latest deployed revision.", "why": "History ties the unhealthy release to the commit Argo deployed."}
+  ],
+  "truth": {"resource": "${application}", "cause": "The workload is failing its readiness probe", "evidence": "${health} health; deployed revision ${revision}", "fix": "No repair requested"},
+  "habits": []
+}

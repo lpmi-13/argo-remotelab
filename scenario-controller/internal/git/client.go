@@ -1,6 +1,7 @@
 package git
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
 	"log"
@@ -171,9 +172,11 @@ func (c *Client) ResetToBaseline() error {
 func (c *Client) Head() (string, error) {
 	cmd := exec.Command("git", "ls-remote", c.cloneURL(), "refs/heads/main")
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	output, err := cmd.CombinedOutput()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("git ls-remote main: %w: %s", err, redactGitOutput(string(output)))
+		return "", fmt.Errorf("git ls-remote main: %w: %s", err, redactGitOutput(stderr.String()))
 	}
 	fields := strings.Fields(string(output))
 	if len(fields) < 2 || fields[1] != "refs/heads/main" {

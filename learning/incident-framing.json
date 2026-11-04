@@ -11,17 +11,36 @@
         "application": {
           "action": "Find the ${environment} shop release in Applications and open it.",
           "reason": "The list contains more than one environment. Confirming the Application first keeps every later observation tied to the right release.",
-          "learning": "This Application is the release whose status we were asked to verify."
+          "learning": "This Application is the release whose deployed version we were asked to verify."
+        },
+        "revision": {
+          "action": "Open History and Rollback and read Revision in the newest entry.",
+          "reason": "History ties an Argo sync event to a commit, so we can distinguish the deployed version from the latest branch tip.",
+          "learning": "History identifies the revision Argo applied. This is the commit to quote in a release status update."
+        }
+      }
+    },
+    "console-unhealthy-version": {
+      "briefing": {
+        "source": "Release health alert",
+        "headline": "Which release is on the unhealthy shop service?",
+        "summary": "The ${environment} shop service is failing health checks. Confirm its status and deployed revision."
+      },
+      "steps": {
+        "application": {
+          "action": "Find the ${environment} shop Application in Applications and open it.",
+          "reason": "The Applications list identifies the affected environment before we inspect its health and version.",
+          "learning": "This is the shop Application whose deployed release is unhealthy."
         },
         "health": {
           "action": "Read the health badge in the Application header.",
-          "reason": "The header gives the current workload state; a Git commit by itself says nothing about whether the workload is healthy.",
-          "learning": "The health badge is the current workload signal. Keep it separate from the sync status and Git revision."
+          "reason": "The badge shows that this deployed workload is not ready, making its version worth investigating.",
+          "learning": "Argo reports ${health} health for this release. Read History to identify its deployed commit."
         },
         "revision": {
-          "action": "Open History and Rollback and read the most recent deployed revision.",
-          "reason": "History ties an Argo sync event to a commit, so we can distinguish the deployed version from the latest branch tip.",
-          "learning": "History identifies the revision Argo applied. This is the commit to quote in a release status update."
+          "action": "Open History and Rollback and read the latest deployed revision.",
+          "reason": "History identifies the commit Argo deployed even though the service is unhealthy.",
+          "learning": "Argo deployed ${revision} while this service was unhealthy. Health and version answer different questions."
         }
       }
     },
@@ -307,8 +326,12 @@
   "debrief": {
     "console-orientation": {
       "application": {"action": "We found ${application} in Applications.", "finding": "It is the ${environment} release."},
-      "health": {"action": "We opened the Application header.", "finding": "The workload is ${answer}."},
       "revision": {"action": "We opened History and Rollback.", "finding": "Argo deployed revision ${answer}."}
+    },
+    "console-unhealthy-version": {
+      "application": {"action": "We found ${application} in Applications.", "finding": "It is the unhealthy ${environment} release."},
+      "health": {"action": "We read the Application header.", "finding": "Argo reports ${answer} health."},
+      "revision": {"action": "We opened History and Rollback.", "finding": "Argo deployed revision ${answer} while the service was unhealthy."}
     },
     "console-resources": {
       "deployment": {"action": "We opened the Application tree.", "finding": "It contains Deployment/${answer}."},
@@ -373,68 +396,72 @@
   },
   "demo": {
     "console-orientation": {
-      "application": {"what": "Find and click ${application} in Applications.", "why": "Its name and environment label identify the release we need to verify."},
-      "health": {"what": "Open ${application}; read Health in the Application header.", "why": "The header reports the current health of this workload."},
-      "revision": {"what": "Open ${application} → History and Rollback; read the latest revision.", "why": "History records the Git commit Argo actually deployed."}
+      "application": {"what": "Find and click ${application} in Applications.", "look": "Look for the ${application} card in Applications.", "why": "Its name and environment label identify the release we need to verify."},
+      "revision": {"what": "Open ${application} → History and Rollback; find Revision in the newest entry.", "look": "Look for Revision in the newest History entry.", "why": "History records the Git commit Argo actually deployed."}
+    },
+    "console-unhealthy-version": {
+      "application": {"what": "Find and click ${application} in Applications.", "look": "Look for the ${application} card with the unhealthy status.", "why": "Its environment label identifies the release with a health problem."},
+      "health": {"what": "Open ${application}; read Health in the Application header.", "look": "Look for Health in the Application header.", "why": "The badge shows whether this release is ready to serve traffic."},
+      "revision": {"what": "Open ${application} → History and Rollback; read the latest revision.", "look": "Look for Revision in the newest History entry.", "why": "History identifies the deployed commit behind this unhealthy release."}
     },
     "console-resources": {
-      "deployment": {"what": "Open ${application} → Tree; locate Deployment/django.", "why": "The tree lists the workload owned by this Application."},
-      "readiness-path": {"what": "Open Deployment/django → Manifest → Desired; read readinessProbe.httpGet.path.", "why": "Desired shows the probe path Argo will apply to new pods."}
+      "deployment": {"what": "Open ${application} → Tree; locate Deployment/django.", "look": "Look for Deployment/django in the Application tree.", "why": "The tree lists the workload owned by this Application."},
+      "readiness-path": {"what": "Open Deployment/django → Manifest → Desired; read readinessProbe.httpGet.path.", "look": "Look for readinessProbe.httpGet.path in the Desired manifest.", "why": "Desired shows the probe path Argo will apply to new pods."}
     },
     "console-history": {
-      "deployed-revision": {"what": "Open ${application} → History and Rollback; read the latest revision.", "why": "History records the Git commit Argo actually deployed."},
-      "last-operation": {"what": "Open ${application} → Sync Status; read the latest operation phase.", "why": "Sync Status shows whether Argo finished applying that revision."}
+      "deployed-revision": {"what": "Open ${application} → History and Rollback; read the latest revision.", "look": "Look for Revision in the newest History entry.", "why": "History records the Git commit Argo actually deployed."},
+      "last-operation": {"what": "Open ${application} → Sync Status; read the latest operation phase.", "look": "Look for the latest operation's phase in Sync Status.", "why": "Sync Status shows whether Argo finished applying that revision."}
     },
     "missing-configmap": {
-      "application": {"what": "Find and click the ${application} card in Applications.", "why": "Its status identifies the release with pods failing to start."},
-      "missing-name": {"what": "Open ${application} → Tree → failing Pod → Events; read the ConfigMap name.", "why": "The Pod warning names the missing dependency blocking startup."},
+      "application": {"what": "Find and click the ${application} card in Applications.", "look": "Look for ${application} in Applications.", "why": "Its status identifies the release with pods failing to start."},
+      "missing-name": {"what": "Open ${application} → Tree → failing Pod → Events; read the ConfigMap name.", "look": "Look for the missing ConfigMap name in the failing Pod's Events.", "why": "The Pod warning names the missing dependency blocking startup."},
       "repair": {"what": "Restore the ConfigMap reference in the Deployment template, then push the Git change.", "why": "The Pod Event names the dependency the desired Deployment must reference."}
     },
     "stuck-sync": {
-      "application": {"what": "In Applications, find and click ${application} after checking its sync status.", "why": "The card identifies the ${environment} release whose sync has not settled."},
-      "probe-path": {"what": "Open ${application} → Tree → Deployment/django → Manifest → Desired; read readinessProbe.httpGet.path.", "why": "Desired shows the probe path Argo keeps applying to new pods."},
+      "application": {"what": "In Applications, find and click ${application} after checking its sync status.", "look": "Look for ${application}'s sync status in Applications.", "why": "The card identifies the ${environment} release whose sync has not settled."},
+      "probe-path": {"what": "Open ${application} → Tree → Deployment/django → Manifest → Desired; read readinessProbe.httpGet.path.", "look": "Look for readinessProbe.httpGet.path in the Desired manifest.", "why": "Desired shows the probe path Argo keeps applying to new pods."},
       "repair": {"what": "Terminate the operation in Sync Status, fix the probe path in Git, then push.", "why": "The old operation blocks a new sync, and the wrong path keeps pods unready."}
     },
     "stale-job": {
-      "application": {"what": "Find and click ${application} in Applications.", "why": "The card identifies the ${environment} release blocked before its Deployment updated."},
-      "hook": {"what": "Open ${application} → Sync Status; read the failed hook phase.", "why": "The operation list shows which hook stopped the rollout."},
-      "log": {"what": "Open ${application} → Tree → migration Job → Logs; read the failure line.", "why": "The Job log explains why the PreSync hook exited."},
+      "application": {"what": "Find and click ${application} in Applications.", "look": "Look for ${application} in Applications.", "why": "The card identifies the ${environment} release blocked before its Deployment updated."},
+      "hook": {"what": "Open ${application} → Sync Status; read the failed hook phase.", "look": "Look for the failed hook's phase in Sync Status.", "why": "The operation list shows which hook stopped the rollout."},
+      "log": {"what": "Open ${application} → Tree → migration Job → Logs; read the failure line.", "look": "Look for the migration Job's failure line in Logs.", "why": "The Job log explains why the PreSync hook exited."},
       "repair": {"what": "Fix the migration hook in Git, push the commit, then resync ${application}.", "why": "The failed PreSync Job must succeed before the Deployment can update."}
     },
     "orphaned-resource": {
-      "application": {"what": "Find and click the ${application} card in Applications.", "why": "The card identifies the Application that owns the affected service."},
-      "orphan": {"what": "Open ${application} → Tree; inspect the Deployment marked for pruning.", "why": "The tree separates the leftover Deployment from the desired workload."},
+      "application": {"what": "Find and click the ${application} card in Applications.", "look": "Look for ${application} in Applications.", "why": "The card identifies the Application that owns the affected service."},
+      "orphan": {"what": "Open ${application} → Tree; inspect the Deployment marked for pruning.", "look": "Look for the Deployment marked for pruning in the tree.", "why": "The tree separates the leftover Deployment from the desired workload."},
       "repair": {"what": "Fix the Service selector in Git, then prune the leftover Deployment in Argo.", "why": "Matching selectors restore endpoints; targeted pruning removes only the old workload."}
     },
     "sops-decrypt-failure": {
-      "application": {"what": "In Applications, find and click ${application} with the comparison error.", "why": "The card identifies the release Argo cannot render."},
-      "cause": {"what": "Open ${application} → Conditions; read the SOPS decryption error.", "why": "Conditions contains the manifest generation error before a resource tree exists."},
+      "application": {"what": "In Applications, find and click ${application} with the comparison error.", "look": "Look for ${application}'s comparison error in Applications.", "why": "The card identifies the release Argo cannot render."},
+      "cause": {"what": "Open ${application} → Conditions; read the SOPS decryption error.", "look": "Look for the SOPS decryption detail in Conditions.", "why": "Conditions contains the manifest generation error before a resource tree exists."},
       "repair": {"what": "Re-encrypt the affected secret in the terminal, then commit and push it.", "why": "Conditions shows Argo cannot decrypt the current file."}
     },
     "sops-global-mac-mismatch": {
-      "application": {"what": "In Applications, find and click ${application} with the comparison error.", "why": "The card identifies the release Argo cannot render."},
-      "cause": {"what": "Open ${application} → Conditions; read the SOPS integrity field in the error.", "why": "Conditions names the field that failed validation during manifest generation."},
+      "application": {"what": "In Applications, find and click ${application} with the comparison error.", "look": "Look for ${application}'s comparison error in Applications.", "why": "The card identifies the release Argo cannot render."},
+      "cause": {"what": "Open ${application} → Conditions; read the SOPS integrity field in the error.", "look": "Look for the integrity field named in the Conditions error.", "why": "Conditions names the field that failed validation during manifest generation."},
       "repair": {"what": "Re-encrypt the secret with a fresh integrity value, then push the Git change.", "why": "The SOPS integrity record must match the encrypted values Argo reads."}
     },
     "hmac-mismatch": {
-      "application": {"what": "In Applications, find and click ${application} with the comparison error.", "why": "The card identifies the release Argo cannot render."},
-      "cause": {"what": "Open ${application} → Conditions; read the error for the encrypted value.", "why": "Conditions distinguishes this value failure from missing keys or whole-file errors."},
+      "application": {"what": "In Applications, find and click ${application} with the comparison error.", "look": "Look for ${application}'s comparison error in Applications.", "why": "The card identifies the release Argo cannot render."},
+      "cause": {"what": "Open ${application} → Conditions; read the error for the encrypted value.", "look": "Look for the encrypted value error in Conditions.", "why": "Conditions distinguishes this value failure from missing keys or whole-file errors."},
       "repair": {"what": "Re-encrypt the affected value from known plaintext, then push the Git change.", "why": "The value needs valid ciphertext before Argo can render manifests."}
     },
     "wrong-type-sops": {
-      "application": {"what": "In Applications, find and click ${application}, the blocked release.", "why": "The card identifies which ${environment} deployment cannot reconcile."},
-      "cause": {"what": "Open ${application} → Conditions or Sync Status; read the values key in the error.", "why": "That error names the input that failed to render or apply."},
+      "application": {"what": "In Applications, find and click ${application}, the blocked release.", "look": "Look for the blocked ${application} card in Applications.", "why": "The card identifies which ${environment} deployment cannot reconcile."},
+      "cause": {"what": "Open ${application} → Conditions or Sync Status; read the values key in the error.", "look": "Look for the values key named in Conditions or Sync Status.", "why": "That error names the input that failed to render or apply."},
       "repair": {"what": "Re-encrypt a valid secrets map in the terminal, then push and resync.", "why": "The chart expects a map; the current encrypted value has the wrong shape."}
     },
     "env-drift": {
-      "application": {"what": "Compare the shop Applications, then click ${application}.", "why": "Their status cards show the failure is limited to ${environment}."},
-      "probe-path": {"what": "Open ${application} → Tree → Deployment/django → Manifest → Desired; read readinessProbe.httpGet.path.", "why": "Desired shows the environment-specific path Argo is applying to unready pods."},
+      "application": {"what": "Compare the shop Applications, then click ${application}.", "look": "Look for the shop Application with a different health status.", "why": "Their status cards show the failure is limited to ${environment}."},
+      "probe-path": {"what": "Open ${application} → Tree → Deployment/django → Manifest → Desired; read readinessProbe.httpGet.path.", "look": "Look for readinessProbe.httpGet.path in the Desired manifest.", "why": "Desired shows the environment-specific path Argo is applying to unready pods."},
       "repair": {"what": "Correct the ${environment} readiness path in its Git values file, then push.", "why": "The working environment provides the expected path without a shared chart change."}
     },
     "repo-auth": {
-      "application": {"what": "In Applications, find and click ${application} with the source error.", "why": "The card identifies the release whose desired state cannot be fetched."},
-      "source": {"what": "Open ${application} → Conditions; read the repository URL and transport.", "why": "Conditions shows which source address Argo failed to fetch."},
-      "working-source": {"what": "Open Settings → Repositories; read the connected Gitea URL and transport.", "why": "The connected entry shows a repository address Argo can already use."},
+      "application": {"what": "In Applications, find and click ${application} with the source error.", "look": "Look for ${application}'s source error in Applications.", "why": "The card identifies the release whose desired state cannot be fetched."},
+      "source": {"what": "Open ${application} → Conditions; read the repository URL and transport.", "look": "Look for the repository URL and transport in Conditions.", "why": "Conditions shows which source address Argo failed to fetch."},
+      "working-source": {"what": "Open Settings → Repositories; read the connected Gitea URL and transport.", "look": "Look for the connected Gitea entry's URL and transport.", "why": "The connected entry shows a repository address Argo can already use."},
       "repair": {"what": "Restore ${application}'s repository URL to the working Gitea address, then refresh.", "why": "Conditions and Repositories reveal the failing transport and the working URL."}
     }
   }

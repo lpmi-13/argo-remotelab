@@ -383,9 +383,21 @@ for line in sys.stdin:
         Running) ;;
         Stopped) colima start --profile "$COLIMA_PROFILE" --activate=false --cpu 4 ;;
         "")
+            MACOS_VERSION=$(sw_vers -productVersion)
+            MACOS_MAJOR_VERSION=${MACOS_VERSION%%.*}
+            if (( MACOS_MAJOR_VERSION >= 13 )); then
+                COLIMA_VM_TYPE=vz
+            else
+                COLIMA_VM_TYPE=qemu
+                if ! command -v qemu-img &>/dev/null; then
+                    echo "  ERROR: Colima needs QEMU on macOS ${MACOS_VERSION}. Install it with: brew install qemu" >&2
+                    exit 1
+                fi
+            fi
             echo "  Starting isolated Colima profile ${COLIMA_PROFILE}..."
             colima start --profile "$COLIMA_PROFILE" --activate=false \
-                --kubernetes --runtime containerd --cpu 4 --memory 8 --disk 60
+                --vm-type "$COLIMA_VM_TYPE" --kubernetes --runtime containerd \
+                --cpu 4 --memory 8 --disk 60
             ;;
         *)
             echo "  ERROR: Colima profile ${COLIMA_PROFILE} is ${COLIMA_STATUS}; repair it before deployment" >&2

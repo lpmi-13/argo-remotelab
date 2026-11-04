@@ -38,7 +38,7 @@ async function fixture(mode, history = false, applicationCard = false, fixSurfac
   let view = {...session(mode), fix_surface: fixSurface};
   if (applicationCard) view = {...view,
     scenario: {id: 'console-orientation', title: 'Find the deployed revision', level: 1},
-    checks_total: 3,
+    checks_total: 2,
     next_check: {id: 'application', target: 'apps.list', where: 'Applications list',
       action: 'Find the application.', reason: 'Confirm the environment.',
       demo: {what: 'Find and click shop-web-prod in Applications.',
@@ -74,7 +74,7 @@ async function fixture(mode, history = false, applicationCard = false, fixSurfac
   const historyMarkup = `<div style="height: 920px"></div>
     <div id="history-scroll" ${history === 'closed' ? 'hidden' : ''} style="height: 240px; overflow: auto; width: 600px; margin-left: 550px; border: 1px solid">
       <div class="application-deployment-history" style="height: 950px">
-        <div style="height: 680px"></div><span id="revision">abc1234</span>
+        <div style="height: 680px"></div><span id="revision-label">Revision:</span> <span id="revision">abc1234</span>
       </div></div><div style="height: 600px"></div>`;
   await page.route('**/*', route => {
     const url = new URL(route.request().url());
@@ -100,11 +100,12 @@ async function fixture(mode, history = false, applicationCard = false, fixSurfac
       actions.push(action);
       if (applicationCard && action.type === 'target_visited' && action.details.target === 'app.header') {
         view = {...view, checks_passed: 1, next_check: {
-          id: 'health', target: 'app.header', where: 'Application header',
-          action: 'Read Health.', reason: 'The header shows current health.',
-          demo: {what: 'Read Health in the Application header.',
-            why: 'The header reports the current health of this workload.'},
-          demonstration_answer: 'Healthy', available: true,
+          id: 'revision', target: 'app.history', where: 'History and Rollback',
+          action: 'Read the deployed revision.', reason: 'History shows the deployed commit.',
+          demo: {what: 'Open shop-web-prod → History and Rollback; find Revision in the newest entry.',
+            look: 'Look for Revision in the newest History entry.',
+            why: 'History records the Git commit Argo actually deployed.'},
+          demonstration_answer: 'abc1234', available: false,
         }};
       }
       return route.fulfill({json: {session: view, evaluation: {accepted: true}}});
@@ -157,7 +158,7 @@ test('first demo step clicks the Application after one countdown', {timeout: 450
       assert.deepEqual(await page.locator('#argocd-coach-host .demo-explanation p').allTextContents(),
         ['Find and click shop-web-prod in Applications.',
           'Its name and environment label identify the release we need to verify.']);
-      assert.equal(await page.locator('#argocd-coach-host .step-count').textContent(), 'Step 1 of 3');
+      assert.equal(await page.locator('#argocd-coach-host .step-count').textContent(), 'Step 1 of 2');
       assert.equal(new URL(page.url()).pathname, '/argocd/applications');
       if (trigger === 'advance') await page.locator('#argocd-coach-host [data-action="advance"]').click();
       else {
@@ -177,12 +178,70 @@ test('first demo step clicks the Application after one countdown', {timeout: 450
       await page.waitForURL('**/argocd/applications/argocd/shop-web-prod');
       await page.locator('#app-detail').waitFor();
       await page.waitForFunction(() => document.querySelector('#argocd-coach-host')?.shadowRoot
-        .querySelector('.step-count')?.textContent === 'Step 2 of 3');
+        .querySelector('.step-count')?.textContent === 'Step 2 of 2');
       assert.equal(await page.evaluate(() => sessionStorage.getItem('application-clicked')), 'true');
       assert.equal((await page.locator('#argocd-coach-host .demo-explanation p').first().textContent()),
-        'Read Health in the Application header.');
+        'Open shop-web-prod → History and Rollback; find Revision in the newest entry.');
     } finally { await browser.close(); }
   }
+});
+
+test('first mission names Revision before highlighting its value', {timeout: 30000}, async () => {
+  const fixturePage = await fixture('demonstration', 'closed');
+  const {browser, page, actions} = fixturePage;
+  try {
+    const current = session('demonstration');
+    fixturePage.setView({...current,
+      scenario: {id: 'console-orientation', title: 'Find the deployed revision', level: 1},
+      checks_passed: 1, checks_total: 2,
+      next_check: {...current.next_check, demo: {
+        what: 'Open shop-web-prod → History and Rollback; find Revision in the newest entry.',
+        look: 'Look for Revision in the newest History entry.',
+        why: 'History records the Git commit Argo actually deployed.',
+      }},
+    });
+    await page.reload();
+    await page.clock.install();
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    await page.locator('#argocd-coach-host [data-action="advance"]').click();
+
+    const phase = page.locator('#argocd-coach-host .demo-explanation span').first();
+    for (let attempt = 0; attempt < 12 && await phase.textContent() !== 'Look'; attempt += 1) {
+      await page.clock.runFor(500);
+    }
+    assert.equal(await phase.textContent(), 'Look');
+    assert.equal(await page.locator('#argocd-coach-host .demo-explanation p').first().textContent(),
+      'Look for Revision in the newest History entry.');
+    assert.equal(await page.locator('#argocd-coach-host .coach-pointer[data-visible]').count(), 0);
+    assert.equal(await page.locator('#argocd-coach-host .spotlight').count(), 0);
+    assert.ok(Number(await page.locator('#argocd-coach-host [data-demo-seconds]').innerText()) <= 4);
+    await page.clock.runFor(3500);
+    assert.equal(await phase.textContent(), 'Look');
+    assert.equal(actions.some(action => action.type === 'evidence_check_answered'), false);
+
+    for (let attempt = 0; attempt < 14 && await phase.textContent() !== 'Found'; attempt += 1) {
+      await page.clock.runFor(500);
+    }
+    assert.equal(await phase.textContent(), 'Found');
+    assert.equal(await page.locator('#argocd-coach-host .demo-explanation p').first().textContent(),
+      'Revision: abc1234');
+    const geometry = await page.evaluate(() => {
+      const label = document.querySelector('#revision-label').getBoundingClientRect();
+      const revision = document.querySelector('#revision').getBoundingClientRect();
+      const highlight = document.querySelector('#argocd-coach-host').shadowRoot
+        .querySelector('.spotlight').getBoundingClientRect();
+      return {label: {left: label.left, top: label.top, right: label.right, bottom: label.bottom},
+        revision: {left: revision.left, top: revision.top, right: revision.right, bottom: revision.bottom},
+        highlight: {left: highlight.left, top: highlight.top, right: highlight.right, bottom: highlight.bottom}};
+    });
+    for (const target of [geometry.label, geometry.revision]) {
+      assert.ok(geometry.highlight.left <= target.left && geometry.highlight.top <= target.top &&
+        geometry.highlight.right >= target.right && geometry.highlight.bottom >= target.bottom,
+      JSON.stringify(geometry));
+    }
+    assert.ok(Number(await page.locator('#argocd-coach-host [data-demo-seconds]').innerText()) >= 14.5);
+    assert.equal(actions.some(action => action.type === 'evidence_check_answered'), false);
+  } finally { await browser.close(); }
 });
 
 for (const [name, desiredInitially, selectedNode, duplicateName = false] of [
@@ -194,12 +253,14 @@ for (const [name, desiredInitially, selectedNode, duplicateName = false] of [
   test(`resource demo skips no-op clicks when ${name}`, {timeout: 30000}, async () => {
     const fixturePage = await fixture('demonstration');
     const {browser, page} = fixturePage;
+    const expectLook = name === 'Live already selected';
     let current = {...session('demonstration'),
       scenario: {id: 'console-resources', title: 'Read a resource', level: 1},
       checks_passed: 1, checks_total: 2,
       next_check: {id: 'readiness-path', target: 'resource.manifest', where: 'Desired manifest',
         action: 'Read the readiness path.', reason: 'Desired shows the path Argo applies.',
         demo: {what: 'Open Deployment/django → Manifest → Desired; read readinessProbe.httpGet.path.',
+          ...(expectLook ? {look: 'Look for readinessProbe.httpGet.path in the Desired manifest.'} : {}),
           why: 'Desired shows the probe path Argo will apply.'},
         demonstration_answer: '/api/health/', available: desiredInitially}};
     fixturePage.setView(current);
@@ -239,6 +300,12 @@ for (const [name, desiredInitially, selectedNode, duplicateName = false] of [
       await page.locator('#argocd-coach-host [data-action="begin"]').click();
       await page.locator('#argocd-coach-host [data-action="advance"]').click();
       if (desiredInitially) assert.equal(await page.locator('#argocd-coach-host .panel[data-doing]').count(), 0);
+      if (expectLook) {
+        await page.locator('#argocd-coach-host .demo-explanation span').first().filter({hasText: 'Look'}).waitFor();
+        assert.equal(await page.locator('#argocd-coach-host .demo-explanation p').first().textContent(),
+          'Look for readinessProbe.httpGet.path in the Desired manifest.');
+        await page.locator('#argocd-coach-host [data-action="advance"]').click();
+      }
       await page.locator('#argocd-coach-host .demo-explanation span').first().filter({hasText: 'Found'}).waitFor();
       assert.deepEqual(await page.evaluate(() => window.tabClicks),
         {node: selectedNode || duplicateName ? 0 : 1, service: 0,
@@ -248,6 +315,48 @@ for (const [name, desiredInitially, selectedNode, duplicateName = false] of [
     } finally { await browser.close(); }
   });
 }
+
+test('condition cue points to the matching error before reporting its value', {timeout: 20000}, async () => {
+  const fixturePage = await fixture('demonstration');
+  const {browser, page, actions} = fixturePage;
+  fixturePage.setView({...session('demonstration'),
+    scenario: {id: 'sops-global-mac-mismatch', title: 'SOPS global MAC mismatch', level: 4},
+    checks_passed: 1, checks_total: 2,
+    next_check: {id: 'cause', target: 'app.conditions', where: 'Conditions',
+      demo: {what: 'Open shop-web-prod → Conditions; read the SOPS integrity field in the error.',
+        look: 'Look for the integrity field named in the Conditions error.',
+        why: 'Conditions names the field that failed validation.'},
+      demonstration_answer: 'sops.mac', available: true},
+  });
+  await page.route('**/argocd/applications/argocd/shop-web-prod', route =>
+    route.fulfill({contentType: 'text/html', body: `<!doctype html><html><body>
+      <section class="application-conditions" style="width: 700px; padding: 30px">
+        <p>Manifest generation failed</p><span id="integrity-error">sops.mac integrity check failed</span>
+      </section><script src="/coach/assets/coach.js"></script></body></html>`}));
+  try {
+    await page.goto('http://lab.test/argocd/applications/argocd/shop-web-prod');
+    await page.clock.install();
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    await page.locator('#argocd-coach-host [data-action="advance"]').click();
+    const phase = page.locator('#argocd-coach-host .demo-explanation span').first();
+    await phase.filter({hasText: 'Look'}).waitFor();
+    assert.equal(await page.locator('#argocd-coach-host .demo-explanation p').first().textContent(),
+      'Look for the integrity field named in the Conditions error.');
+    assert.equal(actions.some(action => action.type === 'evidence_check_answered'), false);
+    for (let attempt = 0; attempt < 14 && await phase.textContent() !== 'Found'; attempt += 1) {
+      await page.clock.runFor(500);
+    }
+    assert.equal(await phase.textContent(), 'Found');
+    assert.equal(await page.locator('#argocd-coach-host .demo-explanation p').first().textContent(), 'sops.mac');
+    const widths = await page.evaluate(() => ({
+      condition: document.querySelector('.application-conditions').getBoundingClientRect().width,
+      highlight: document.querySelector('#argocd-coach-host').shadowRoot
+        .querySelector('.spotlight').getBoundingClientRect().width,
+    }));
+    assert.ok(widths.highlight < widths.condition / 2, JSON.stringify(widths));
+    assert.equal(actions.some(action => action.type === 'evidence_check_answered'), false);
+  } finally { await browser.close(); }
+});
 
 test('demo stops after one ineffective Desired Manifest click', {timeout: 15000}, async () => {
   const fixturePage = await fixture('demonstration');
@@ -275,9 +384,15 @@ test('demo stops after one ineffective Desired Manifest click', {timeout: 15000}
   });
   try {
     await page.goto('http://lab.test/argocd/applications/argocd/shop-web-prod?view=tree&node=%2FDeployment%2Fapplications%2Fdjango%2F0&tab=manifest');
+    await page.clock.install();
     await page.locator('#argocd-coach-host [data-action="begin"]').click();
     await page.locator('#argocd-coach-host [data-action="advance"]').click();
-    await page.locator('#argocd-coach-host [role="status"]').filter({hasText: /could not open Desired Manifest/}).waitFor();
+    const failure = page.locator('#argocd-coach-host [role="status"]')
+      .filter({hasText: /could not open Desired Manifest/});
+    for (let attempt = 0; attempt < 20 && !await failure.isVisible(); attempt += 1) {
+      await page.clock.runFor(500);
+    }
+    await failure.waitFor();
     assert.equal(await page.evaluate(() => window.desiredClicks), 1);
     assert.equal(await page.locator('#argocd-coach-host [data-action="advance"]').isVisible(), false);
   } finally { await browser.close(); }
@@ -292,10 +407,15 @@ test('demo stops after one ineffective History click', {timeout: 15000}, async (
       <script src="/coach/assets/coach.js"></script></body></html>`}));
   try {
     await page.goto('http://lab.test/argocd/applications/argocd/shop-web-prod');
+    await page.clock.install();
     await page.locator('#argocd-coach-host [data-action="begin"]').click();
     await page.locator('#argocd-coach-host [data-action="advance"]').click();
-    await page.locator('#argocd-coach-host [role="status"]')
-      .filter({hasText: /could not open History and Rollback/}).waitFor();
+    const failure = page.locator('#argocd-coach-host [role="status"]')
+      .filter({hasText: /could not open History and Rollback/});
+    for (let attempt = 0; attempt < 20 && !await failure.isVisible(); attempt += 1) {
+      await page.clock.runFor(500);
+    }
+    await failure.waitFor();
     assert.equal(await page.evaluate(() => window.historyClicks), 1);
     assert.equal(await page.locator('#argocd-coach-host [data-action="advance"]').isVisible(), false);
   } finally { await browser.close(); }
@@ -673,11 +793,54 @@ test('terminal minimizes without remounting, resizes, and debrief is centered', 
   } finally { await browser.close(); }
 });
 
+test('debrief advances to the next scenario before moving to the next level', {timeout: 15000}, async () => {
+  const fixturePage = await fixture('guided');
+  const {browser, page} = fixturePage;
+  const feedback = {total: null, fixed: true, durable: true, debrief_steps: []};
+  const nextLink = page.locator('#argocd-coach-host a', {hasText: 'Next scenario'});
+  try {
+    await page.route('**/coach/learning/api/catalog', route => route.fulfill({json: {
+      levels: [{level: 1, title: 'Console orientation'}, {level: 2, title: 'Read the tree, fix in git'}],
+      scenarios: [
+        {id: 'console-orientation', title: 'Find the deployed revision', level: 1, brief: 'Find the release.'},
+        {id: 'console-unhealthy-version', title: 'Check an unhealthy release', level: 1, brief: 'Find the version.'},
+        {id: 'console-history', title: 'Read the release history', level: 1, brief: 'Find the revision.'},
+        {id: 'missing-configmap', title: 'Missing ConfigMap', level: 2, brief: 'Repair the deployment.'},
+      ],
+    }}));
+
+    for (const {current, level, following, nextLevel} of [
+      {current: 'console-orientation', level: 1, following: 'console-unhealthy-version', nextLevel: 1},
+      {current: 'console-history', level: 1, following: 'missing-configmap', nextLevel: 2},
+    ]) {
+      fixturePage.setView({...session('guided'), scenario: {id: current, title: current, level},
+        state: 'COMPLETED', next_scenario: following, feedback});
+      await page.reload();
+      await nextLink.waitFor();
+      assert.equal(await nextLink.getAttribute('href'),
+        `/?scenario=${following}&mode=guided&environment=prod`);
+      await nextLink.click();
+      await page.waitForURL(`http://lab.test/?scenario=${following}&mode=guided&environment=prod`);
+      assert.equal(await page.locator('#scenario').inputValue(), following);
+      assert.equal(await page.locator('.curriculum-level.is-open').getAttribute('data-level'), String(nextLevel));
+      await page.goto('http://lab.test/argocd/applications');
+    }
+
+    fixturePage.setView({...session('guided'), scenario: {id: 'repo-auth', title: 'Repository authentication', level: 5},
+      state: 'COMPLETED', next_scenario: null, feedback});
+    await page.reload();
+    await page.locator('#argocd-coach-host .debrief-modal').waitFor();
+    assert.equal(await nextLink.count(), 0);
+  } finally { await browser.close(); }
+});
+
 test('challenge debrief reveals score components and the reference finding', {timeout: 15000}, async () => {
   const fixturePage = await fixture('challenge');
   const {browser, page} = fixturePage;
   try {
-    fixturePage.setView({...session('challenge'), state: 'COMPLETED', feedback: {
+    fixturePage.setView({...session('challenge'),
+      scenario: {id: 'missing-configmap', title: 'Shop pods are failing to start', level: 2},
+      state: 'COMPLETED', feedback: {
       total: 82, fixed: true, durable: false,
       breakdown: {remediation: 20, console_evidence: 23, diagnosis: 19, operational_practice: 10, efficiency: 10},
       truth: {cause: 'A missing ConfigMap', evidence: 'CreateContainerConfigError', fix: 'Restore the reference in Git'},
@@ -694,5 +857,24 @@ test('challenge debrief reveals score components and the reference finding', {ti
     await reference.locator('summary').click();
     assert.match(await reference.innerText(), /Cause\s+A missing ConfigMap/);
     assert.match(await page.locator('#argocd-coach-host .debrief-practice').innerText(), /not reflected/);
+  } finally { await browser.close(); }
+});
+
+test('unhealthy Level 1 mission ends with an evidence debrief', {timeout: 15000}, async () => {
+  const fixturePage = await fixture('demonstration');
+  const {browser, page} = fixturePage;
+  try {
+    fixturePage.setView({...session('demonstration'),
+      scenario: {id: 'console-unhealthy-version', title: 'Check an unhealthy release', level: 1},
+      state: 'COMPLETED', fixed: false, health: 'Progressing', feedback: {
+        total: null, fixed: false, durable: false,
+        debrief_steps: [{action: 'We read the Application header.', finding: 'Argo reports Progressing health.'}],
+      }});
+    await page.reload();
+    await page.locator('#argocd-coach-host .debrief-modal').waitFor();
+    assert.equal(await page.locator('#argocd-coach-host .debrief-outcome').textContent(),
+      'Unhealthy release evidence verified.');
+    assert.match(await page.locator('#argocd-coach-host .debrief-steps').innerText(),
+      /We read the Application header\.\s+Argo reports Progressing health\./);
   } finally { await browser.close(); }
 });

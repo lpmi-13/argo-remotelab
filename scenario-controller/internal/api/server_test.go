@@ -129,6 +129,28 @@ func TestAppStatePredicates(t *testing.T) {
 	}
 }
 
+func TestUnhealthyVersionRequiresDeployedHistoryAndUnavailableService(t *testing.T) {
+	run := &Run{Scenario: "console-unhealthy-version", TriggerRevision: "abc123"}
+	probe := statusProbe("Progressing", "Synced", false)
+	status := probe["status"].(map[string]any)
+	status["history"] = []any{map[string]any{"revision": "baseline"}, map[string]any{"revision": "abc123"}}
+	if !unhealthyVersionDetected(run, probe, false) {
+		t.Fatal("a deployed unhealthy release with no service endpoint should be ready")
+	}
+	if unhealthyVersionDetected(run, probe, true) {
+		t.Fatal("a still-working service should not be described as unhealthy")
+	}
+	status["history"] = []any{map[string]any{"revision": "baseline"}}
+	if unhealthyVersionDetected(run, probe, false) {
+		t.Fatal("the run should wait until History shows the injected revision")
+	}
+	status["history"] = []any{map[string]any{"revision": "abc123"}}
+	status["health"] = map[string]any{"status": "Healthy"}
+	if unhealthyVersionDetected(run, probe, false) {
+		t.Fatal("healthy Application status should not satisfy the unhealthy mission")
+	}
+}
+
 func TestLiveOnlyRepairIsNotDurable(t *testing.T) {
 	gitHead := "abc123"
 	if sourceRevisionChanged(&Run{Scenario: "missing-configmap", TriggerRevision: gitHead}, gitHead) {

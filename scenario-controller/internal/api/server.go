@@ -29,10 +29,10 @@ const (
 	maxRunLifetime = 75 * time.Minute
 )
 
-var orientationMissions = []string{"console-orientation", "console-resources", "console-history"}
+var levelOneMissions = []string{"console-orientation", "console-unhealthy-version", "console-resources", "console-history"}
 
-func isOrientation(name string) bool {
-	for _, mission := range orientationMissions {
+func isLevelOne(name string) bool {
+	for _, mission := range levelOneMissions {
 		if name == mission {
 			return true
 		}
@@ -87,7 +87,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && path == "healthz":
 		respond(w, 200, map[string]any{"status": "ok"})
 	case r.Method == http.MethodGet && path == "api/catalog":
-		respond(w, 200, map[string]any{"scenarios": append(append([]string{}, orientationMissions...), s.registry.Names()...)})
+		respond(w, 200, map[string]any{"scenarios": append(append([]string{}, levelOneMissions...), s.registry.Names()...)})
 	case r.Method == http.MethodGet && path == "probe":
 		s.probe(w, r)
 	case r.Method == http.MethodPost && path == "api/refresh":
@@ -223,7 +223,7 @@ func (s *Server) createRun(w http.ResponseWriter, request map[string]any) {
 	if name == "" {
 		name = "console-orientation"
 	}
-	if !isOrientation(name) && s.registry.Find(name) == nil {
+	if !isLevelOne(name) && s.registry.Find(name) == nil {
 		respondError(w, 404, fmt.Errorf("unknown scenario %q", name))
 		return
 	}
@@ -297,23 +297,24 @@ func (s *Server) prepareCreate(replace bool) error {
 
 func manifestFor(run *Run) map[string]any {
 	brief := map[string]string{
-		"console-orientation":      "Find the application for this environment and identify its deployed revision in Argo CD.",
-		"console-resources":        "Find the shop Deployment in the tree and read its readiness probe in the Desired manifest.",
-		"console-history":          "Read the latest deployed revision in History and the result of the last sync operation.",
-		"missing-configmap":        "A release is not starting. Find the affected workload and the most recent warning in Argo CD.",
-		"stuck-sync":               "The release is still progressing and traffic is failing. Find what keeps the pods from becoming ready.",
-		"stale-job":                "The release is blocked before the workload updates. Find the failed sync hook.",
-		"orphaned-resource":        "The application has a new deployment but the service is returning errors. Check the resource tree and diff.",
-		"sops-decrypt-failure":     "Argo CD cannot compare the new revision. Read the application condition and restore the encrypted source.",
-		"sops-global-mac-mismatch": "The encrypted configuration no longer renders. Find the comparison error in Argo CD.",
-		"hmac-mismatch":            "The latest encrypted configuration cannot be decrypted. Find the failing source in Argo CD.",
-		"wrong-type-sops":          "The latest secrets change blocked deployment. Read the render or sync failure in Argo CD.",
-		"env-drift":                "One shop environment is healthy while the other release is failing. Compare their values and revisions.",
-		"repo-auth":                "The shop Application cannot fetch its source. Read the repository error and compare it with the working entry.",
+		"console-orientation":       "Find the application for this environment and identify its deployed revision in Argo CD.",
+		"console-unhealthy-version": "Find the unhealthy shop Application, read its health, and identify its deployed revision in History.",
+		"console-resources":         "Find the shop Deployment in the tree and read its readiness probe in the Desired manifest.",
+		"console-history":           "Read the latest deployed revision in History and the result of the last sync operation.",
+		"missing-configmap":         "A release is not starting. Find the affected workload and the most recent warning in Argo CD.",
+		"stuck-sync":                "The release is still progressing and traffic is failing. Find what keeps the pods from becoming ready.",
+		"stale-job":                 "The release is blocked before the workload updates. Find the failed sync hook.",
+		"orphaned-resource":         "The application has a new deployment but the service is returning errors. Check the resource tree and diff.",
+		"sops-decrypt-failure":      "Argo CD cannot compare the new revision. Read the application condition and restore the encrypted source.",
+		"sops-global-mac-mismatch":  "The encrypted configuration no longer renders. Find the comparison error in Argo CD.",
+		"hmac-mismatch":             "The latest encrypted configuration cannot be decrypted. Find the failing source in Argo CD.",
+		"wrong-type-sops":           "The latest secrets change blocked deployment. Read the render or sync failure in Argo CD.",
+		"env-drift":                 "One shop environment is healthy while the other release is failing. Compare their values and revisions.",
+		"repo-auth":                 "The shop Application cannot fetch its source. Read the repository error and compare it with the working entry.",
 	}
 	level := 4
 	switch run.Scenario {
-	case "console-orientation", "console-resources", "console-history":
+	case "console-orientation", "console-unhealthy-version", "console-resources", "console-history":
 		level = 1
 	case "missing-configmap", "stuck-sync":
 		level = 2
@@ -387,7 +388,7 @@ func (s *Server) execute(ctx context.Context, run *Run) {
 			return
 		}
 	}
-	if !isOrientation(run.Scenario) {
+	if !isLevelOne(run.Scenario) || run.Scenario == "console-unhealthy-version" {
 		s.setState(run, "INJECTING", "")
 		if run.Scenario == "repo-auth" {
 			if err := s.argo.ForApplication(run.Application).SetRepoURL(ctx, brokenRepoURL); err != nil {
@@ -396,6 +397,9 @@ func (s *Server) execute(ctx context.Context, run *Run) {
 			}
 		} else {
 			selected := s.registry.Find(run.Scenario)
+			if run.Scenario == "console-unhealthy-version" {
+				selected = &scenarios.UnhealthyVersion{}
+			}
 			if err := selected.Inject(s.git.ForChart(chartFor(run.Environment)).ForSeed(run.Seed)); err != nil {
 				s.fail(run, err)
 				return
@@ -464,7 +468,7 @@ func (s *Server) execute(ctx context.Context, run *Run) {
 				return
 			}
 			if state == "READY" || state == "INVESTIGATING" {
-				if s.fixed(ctx, run, probe) && !isOrientation(run.Scenario) {
+				if s.fixed(ctx, run, probe) && !isLevelOne(run.Scenario) {
 					s.setState(run, "FIXED", "")
 				}
 			}
@@ -503,6 +507,31 @@ func healthOf(probe map[string]any) string {
 	health, _ := status["health"].(map[string]any)
 	value, _ := health["status"].(string)
 	return value
+}
+
+func syncStatus(probe map[string]any) string {
+	status, _ := probe["status"].(map[string]any)
+	syncState, _ := status["sync"].(map[string]any)
+	value, _ := syncState["status"].(string)
+	return value
+}
+
+func latestHistoryRevision(probe map[string]any) string {
+	status, _ := probe["status"].(map[string]any)
+	history, _ := status["history"].([]any)
+	if len(history) == 0 {
+		return ""
+	}
+	latest, _ := history[len(history)-1].(map[string]any)
+	revision, _ := latest["revision"].(string)
+	return revision
+}
+
+func unhealthyVersionDetected(run *Run, probe map[string]any, endpointOK bool) bool {
+	return run.TriggerRevision != "" && revision(probe) == run.TriggerRevision &&
+		syncStatus(probe) == "Synced" && latestHistoryRevision(probe) == run.TriggerRevision &&
+		(healthOf(probe) == "Progressing" || healthOf(probe) == "Degraded") &&
+		probe["operation_running"] != true && !endpointOK
 }
 
 func operationPhase(probe map[string]any) string {
@@ -568,6 +597,8 @@ func (s *Server) httpOK(ctx context.Context, environment string) bool {
 
 func (s *Server) detected(ctx context.Context, run *Run, probe map[string]any) bool {
 	switch run.Scenario {
+	case "console-unhealthy-version":
+		return unhealthyVersionDetected(run, probe, s.httpOK(ctx, run.Environment))
 	case "missing-configmap", "env-drift":
 		return healthOf(probe) == "Degraded" || healthOf(probe) == "Progressing"
 	case "stuck-sync":
@@ -634,14 +665,14 @@ func revision(probe map[string]any) string {
 }
 
 func sourceRevisionChanged(run *Run, head string) bool {
-	if run == nil || isOrientation(run.Scenario) || run.Scenario == "repo-auth" {
+	if run == nil || isLevelOne(run.Scenario) || run.Scenario == "repo-auth" {
 		return true
 	}
 	return run.TriggerRevision != "" && head != run.TriggerRevision
 }
 
 func sourceTreeChanged(run *Run, head, tree string) bool {
-	if run == nil || isOrientation(run.Scenario) || run.Scenario == "repo-auth" {
+	if run == nil || isLevelOne(run.Scenario) || run.Scenario == "repo-auth" {
 		return true
 	}
 	return sourceRevisionChanged(run, head) && run.TriggerChartTree != "" &&
@@ -649,7 +680,7 @@ func sourceTreeChanged(run *Run, head, tree string) bool {
 }
 
 func sourceRenderChanged(run *Run, renderHash string) bool {
-	if run == nil || isOrientation(run.Scenario) || run.Scenario == "repo-auth" {
+	if run == nil || isLevelOne(run.Scenario) || run.Scenario == "repo-auth" {
 		return true
 	}
 	if renderHash == "" {
@@ -768,7 +799,7 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request) {
 	if head, err := s.git.Head(); err == nil {
 		probe["git_revision"] = head
 		durable := probe["fixed"] == true && revision(probe) == head && sourceRevisionChanged(run, head)
-		if durable && run != nil && !isOrientation(run.Scenario) && run.Scenario != "repo-auth" {
+		if durable && run != nil && !isLevelOne(run.Scenario) && run.Scenario != "repo-auth" {
 			if tree, err := s.chartTreeAtHead(head, run.Environment); err == nil {
 				durable = sourceTreeChanged(run, head, tree)
 			} else {
@@ -815,8 +846,8 @@ func (s *Server) referenceFix(w http.ResponseWriter, id string) {
 		return
 	}
 	s.mu.Unlock()
-	if isOrientation(run.Scenario) {
-		respondError(w, 409, errors.New("orientation has no failure to fix"))
+	if isLevelOne(run.Scenario) {
+		respondError(w, 409, errors.New("Level 1 missions have no repair step"))
 		return
 	}
 	if run.Scenario == "repo-auth" {
@@ -914,7 +945,7 @@ func (s *Server) transition(w http.ResponseWriter, ctx context.Context, id strin
 		return
 	}
 	confirmedFixed := false
-	if state == "COMPLETED" && !isOrientation(run.Scenario) {
+	if state == "COMPLETED" && !isLevelOne(run.Scenario) {
 		probe, err := s.argo.ForApplication(run.Application).Probe(ctx)
 		confirmedFixed = err == nil && s.fixed(ctx, run, probe)
 	}
@@ -923,7 +954,7 @@ func (s *Server) transition(w http.ResponseWriter, ctx context.Context, id strin
 		run.State = state
 	} else if state == "COMPLETED" && (confirmedFixed &&
 		(run.State == "READY" || run.State == "INVESTIGATING" || run.State == "FIXED") ||
-		isOrientation(run.Scenario) && run.State == "INVESTIGATING") {
+		isLevelOne(run.Scenario) && run.State == "INVESTIGATING") {
 		run.State = state
 		run.cancel()
 	} else {

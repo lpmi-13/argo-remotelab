@@ -41,6 +41,7 @@
   let demoCountdown = null;
   let demoCountdownTicker = null;
   const demoAdvanceDelay = 15000;
+  const evidenceLocateDelay = 4000;
   const briefDuration = demoAdvanceDelay;
   let briefRemaining = briefDuration;
   let briefDeadline = null;
@@ -167,7 +168,7 @@
       }
       if (result.session) applyView(result.session, true);
       else render();
-      if (view?.scenario.level === 1 && view.feedback?.fixed) {
+      if (view?.scenario.level === 1 && view.feedback) {
         localStorage.setItem('argo-coach:orientation-complete', 'true');
       }
     }).catch(reason => say(reason.message, true));
@@ -351,8 +352,8 @@
     updateDemoCountdown();
   }
 
-  function startDemoDelay(onComplete) {
-    startDemoCountdown(demoAdvanceDelay);
+  function startDemoDelay(onComplete, duration = demoAdvanceDelay) {
+    startDemoCountdown(duration);
     if (restoreAdvanceFocus) root.querySelector('#demo-advance')?.focus();
     restoreAdvanceFocus = false;
     const countdown = demoCountdown;
@@ -370,10 +371,10 @@
     resumeDemoDelay();
   }
 
-  function demoWait() {
+  function demoWait(duration = demoAdvanceDelay) {
     return new Promise(resolve => {
       demoWaitResolve = resolve;
-      startDemoDelay(() => { demoWaitResolve = null; resolve(); });
+      startDemoDelay(() => { demoWaitResolve = null; resolve(); }, duration);
     });
   }
 
@@ -389,7 +390,7 @@
     if (demoAdvance || demoBusy || demoStopped || demoPaused || document.hidden || briefOpen || view?.mode !== 'demonstration' ||
         view.feedback || !['READY', 'INVESTIGATING', 'FIXED'].includes(view.state)) return;
     const stepId = demoStepId();
-    if (stepId && demoNarration?.id === stepId && demoNarration.phase === 'doing') {
+    if (stepId && demoNarration?.id === stepId && ['doing', 'locate'].includes(demoNarration.phase)) {
       void driveDemo();
     } else startDemoDelay(driveDemo);
   }
@@ -481,18 +482,21 @@
           <p class="small muted">After Argo is Healthy and Synced, verify the deployed revision in History.</p>
           ${view.fix_paths.length ? `<p class="small muted">Likely source: ${view.fix_paths.map(path => `<code>${escape(path)}</code>`).join(' ')}</p>` : ''}</div>`;
       }
-      return `<p class="muted">Evidence gathered. Write a short incident note to finish the run.</p>`;
+      return `<p class="muted">${view.scenario.level === 1 ? 'Evidence gathered. Finishing this mission…' : 'Evidence gathered. Write a short incident note to finish the run.'}</p>`;
     }
     const ready = check.available;
     if (view.mode === 'demonstration') {
       const narration = demoNarration?.id === check.id ? demoNarration : null;
       const found = narration?.phase === 'learning';
-      const what = found ? check.demonstration_answer : narration?.phase === 'doing'
+      const orientationRevision = view.scenario.id === 'console-orientation' && check.id === 'revision';
+      const locating = Boolean(check.demo?.look) && narration?.phase === 'locate';
+      const what = found ? (orientationRevision ? `Revision: ${check.demonstration_answer}` : check.demonstration_answer)
+        : locating ? check.demo.look : narration?.phase === 'doing'
         ? narration.detail || check.demo?.what || check.action : check.demo?.what || check.action;
       const why = narration?.phase === 'doing' && narration.detailReason
         ? narration.detailReason : check.demo?.why || check.reason;
       return `<section class="step-card demo-step"><p class="step-count">Step ${view.checks_passed + 1} of ${view.checks_total}</p>
-        ${demoExplanation(what, why, found ? 'Found' : narration?.phase === 'doing' ? 'Doing' : 'Next')}</section>`;
+        ${demoExplanation(what, why, found ? 'Found' : locating ? 'Look' : narration?.phase === 'doing' ? 'Doing' : 'Next')}</section>`;
     }
     return `<div class="card step-card"><p class="step-count">Evidence step ${view.checks_passed + 1} of ${view.checks_total}</p>
       <p class="step-eyebrow">What to inspect next</p><strong>${escape(check.action)}</strong>
@@ -531,8 +535,9 @@
     const feedback = view.feedback;
     if (!feedback) return '';
     const steps = feedback.debrief_steps || [];
-    const outcome = !feedback.fixed ? 'The deployment still needs repair.' : view.scenario.level === 1
-      ? 'Release evidence verified.' : feedback.durable
+    const outcome = view.scenario.level === 1
+      ? feedback.fixed ? 'Release evidence verified.' : 'Unhealthy release evidence verified.'
+      : !feedback.fixed ? 'The deployment still needs repair.' : feedback.durable
         ? 'The deployment recovered and the repair is in the deployed Git revision.'
         : 'The deployment recovered, but the repair is not in the deployed Git revision.';
     const scoreParts = [
@@ -550,6 +555,9 @@
     if (view.seed != null) sameSeed.set('seed', String(view.seed));
     const lessHelp = new URLSearchParams(replay);
     lessHelp.set('mode', view.mode === 'demonstration' ? 'guided' : 'challenge');
+    const nextScenario = view.next_scenario && new URLSearchParams({
+      scenario: view.next_scenario, mode: view.mode, environment: view.environment,
+    });
     return `<div class="debrief-content"><h2 id="debrief-title">Debrief${feedback.total == null ? '' : ` · ${escape(feedback.total)} / 100`}</h2>
       <p class="debrief-outcome">${escape(outcome)}</p>
       ${steps.length ? `<ol class="debrief-steps" aria-label="Steps taken and what we learned">${steps.map(step =>
@@ -566,7 +574,7 @@
       <div class="actions"><a class="secondary" href="/?${escape(sameSeed)}">Replay same key</a>
         <a class="secondary" href="/?${escape(replay)}">New key</a>
         ${view.mode !== 'challenge' && view.scenario.level !== 1 ? `<a class="secondary" href="/?${escape(lessHelp)}">Less help</a>` : ''}
-        ${view.scenario.level < 5 ? `<a class="secondary" href="/?next_level=${view.scenario.level + 1}">Next level</a>` : ''}</div></div>`;
+        ${nextScenario ? `<a class="secondary" href="/?${escape(nextScenario)}">Next scenario</a>` : ''}</div></div>`;
   }
 
   function noteForm() {
@@ -828,12 +836,17 @@
     return true;
   }
 
-  function spotlight(element) {
+  function spotlight(element, relatedElement = null) {
     const bounds = element.getBoundingClientRect();
+    const related = relatedElement?.getBoundingClientRect();
+    const left = Math.min(bounds.left, related?.left ?? bounds.left);
+    const top = Math.min(bounds.top, related?.top ?? bounds.top);
+    const right = Math.max(bounds.right, related?.right ?? bounds.right);
+    const bottom = Math.max(bounds.bottom, related?.bottom ?? bounds.bottom);
     const frame = document.createElement('div');
     frame.className = 'spotlight';
-    Object.assign(frame.style, {left: `${bounds.left - 4}px`, top: `${bounds.top - 4}px`,
-      width: `${bounds.width + 8}px`, height: `${bounds.height + 8}px`});
+    Object.assign(frame.style, {left: `${left - 4}px`, top: `${top - 4}px`,
+      width: `${right - left + 8}px`, height: `${bottom - top + 8}px`});
     root.append(frame);
     setTimeout(() => frame.remove(), 5000);
   }
@@ -907,12 +920,12 @@
     return element.isConnected && !demoStopped;
   }
 
-  async function pointAt(element, click = false) {
+  async function pointAt(element, click = false, highlightWith = null) {
     if (!element?.isConnected || !visible(element) || demoStopped) return false;
     if (!await scrollToTarget(element)) return false;
     const bounds = element.getBoundingClientRect();
     if (!bounds.width || !bounds.height) return false;
-    spotlight(element);
+    spotlight(element, highlightWith);
     if (!pointer.style.left) {
       const panel = root.querySelector('.panel')?.getBoundingClientRect();
       pointer.style.left = `${panel?.left ?? window.innerWidth - 80}px`;
@@ -947,20 +960,42 @@
       'resource.manifest': '.application-node-info__manifest--raw',
     };
     const history = check.target === 'app.history' && document.querySelector('.application-deployment-history');
-    const revision = String(check.demonstration_answer || '').toLowerCase();
-    const historyRevision = history && revision && Array.from(history.querySelectorAll('*')).find(element => {
+    const answer = String(check.demonstration_answer || '').toLowerCase();
+    const historyRevision = history && answer && Array.from(history.querySelectorAll('*')).find(element => {
       if (element.childElementCount || !visible(element)) return false;
       const text = element.textContent?.trim().toLowerCase() || '';
-      return text.includes(revision) || (text.length >= 7 && revision.startsWith(text));
+      return text.includes(answer) || (text.length >= 7 && answer.startsWith(text));
     });
+    const evidenceScope = {
+      'app.operation': '.application-operation-state__message, .application-operation-state__icons_container_padding',
+      'app.conditions': '.application-conditions',
+      'resource.events': '.application-node-info',
+      'resource.logs': '.application-node-info',
+      'resource.manifest': '.application-node-info__manifest--raw',
+    }[check.target];
+    const scope = evidenceScope && Array.from(document.querySelectorAll(evidenceScope)).find(visible);
+    const answerMatch = scope && answer && [scope, ...scope.querySelectorAll('*')]
+      .filter(element => !element.childElementCount && visible(element) &&
+        element.textContent?.toLowerCase().includes(answer))
+      .sort((a, b) => a.textContent.length - b.textContent.length)[0];
     return (check.target === 'apps.list' ? exact(view.application) : null) ||
       (check.target === 'app.header' ? exact(view.health || '') : null) ||
       (check.target === 'app.tree' ? exact(check.demonstration_answer || '') : null) ||
-      historyRevision || history ||
+      historyRevision || answerMatch || history ||
       (check.target === 'settings.repos' ? candidate('gitea.applications.svc.cluster.local') : null) ||
       Array.from(document.querySelectorAll(selectors[check.target] || '.__argo_coach_no_match__')).find(visible) ||
       candidate(({'app.history': 'History', 'app.operation': 'Sync Status',
         'resource.manifest': 'Desired'}[check.target]) || check.target.split('.')[1]);
+  }
+
+  function historyRevisionLabel(element) {
+    const history = element?.closest('.application-deployment-history');
+    if (!history) return null;
+    const top = element.getBoundingClientRect().top;
+    return Array.from(history.querySelectorAll('*')).filter(candidate =>
+      /^revision:?$/i.test(candidate.textContent?.trim() || '') && visible(candidate) &&
+      Math.abs(candidate.getBoundingClientRect().top - top) < 32)
+      .sort((a, b) => a.getBoundingClientRect().width - b.getBoundingClientRect().width)[0] || null;
   }
 
   async function activate(element, demonstration) {
@@ -1219,7 +1254,7 @@
       const feedback = await request(sessionPath + '/note', {method: 'POST', body: JSON.stringify(values)});
       noteOpen = false;
       view.feedback = feedback;
-    if (view.scenario.level === 1 && feedback.fixed) localStorage.setItem('argo-coach:orientation-complete', 'true');
+      if (view.scenario.level === 1) localStorage.setItem('argo-coach:orientation-complete', 'true');
       say(feedback.message);
       await refresh();
     } catch (reason) { say(reason.message, true); }
@@ -1227,10 +1262,24 @@
 
   async function showDemoFinding(check) {
     clearDemoLocationAttempts();
+    const needsLook = Boolean(check.demo?.look);
+    const phase = demoNarration?.id === check.id ? demoNarration.phase : null;
+    if (needsLook && phase === 'learning') {
+      await answerCheck(check.demonstration_answer);
+      return;
+    }
+    if (needsLook && phase !== 'locate') {
+      pointer.removeAttribute('data-visible');
+      setDemoNarration(check.id, 'locate');
+      await demoWait(evidenceLocateDelay);
+    }
+    if (demoStopped || view.next_check?.id !== check.id) return;
     const element = evidenceElement(check);
-    if (element) await pointAt(element);
+    const label = check.target === 'app.history' ? historyRevisionLabel(element) : null;
+    if (element) await pointAt(element, false, label);
     if (demoStopped || view.next_check?.id !== check.id) return;
     setDemoNarration(check.id, 'learning');
+    if (needsLook && element?.isConnected && visible(element)) spotlight(element, label);
     await demoWait();
     if (demoStopped || view.next_check?.id !== check.id) return;
     await answerCheck(check.demonstration_answer);

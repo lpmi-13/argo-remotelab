@@ -22,7 +22,7 @@ def probe(fixed=True, durable=True):
 def session(name="missing-configmap", mode="challenge"):
     return {"id": "test", "run_id": "run-test", "mode": mode,
             "pack": server.PACKS[name], "application": "shop-web-prod", "environment": "prod",
-            "visited": set(), "passed": set(), "actions": [], "last_sequence": 0,
+            "visited": set(), "passed": set(), "answers": {}, "actions": [], "last_sequence": 0,
             "note": None, "feedback": None}
 
 
@@ -33,7 +33,7 @@ class LearningServiceTests(unittest.TestCase):
         server.log_event = lambda *args: None
 
     def test_pack_contracts_and_targets(self):
-        self.assertEqual(len(server.PACKS), 13)
+        self.assertEqual(len(server.PACKS), 14)
         self.assertIn("settings.repos", server.TARGETS)
         for pack in server.PACKS.values():
             self.assertTrue(pack["checks"])
@@ -41,6 +41,9 @@ class LearningServiceTests(unittest.TestCase):
             briefing = pack["briefing"]
             self.assertEqual(set(briefing), {"source", "headline", "summary"})
             self.assertLessEqual(len(briefing["summary"].split()), 16)
+            for check in pack["checks"]:
+                self.assertTrue(check["demo"]["look"].startswith("Look for"), pack["id"])
+                self.assertLessEqual(len(check["demo"]["look"].split()), 16)
             for step in pack["checks"] + ([pack["repair"]] if pack["repair"] else []):
                 copy = step["debrief"]
                 self.assertTrue(copy["action"].startswith("We "))
@@ -50,10 +53,33 @@ class LearningServiceTests(unittest.TestCase):
     def test_curriculum_starts_at_level_one_and_orientation_has_no_repair_step(self):
         self.assertEqual([item["level"] for item in server.CATALOG["levels"]], [1, 2, 3, 4, 5])
         self.assertEqual(min(pack["level"] for pack in server.PACKS.values()), 1)
+        self.assertEqual(server.CATALOG["scenarios"][:2],
+                         ["console-orientation", "console-unhealthy-version"])
+        self.assertEqual([check["id"] for check in server.PACKS["console-orientation"]["checks"]],
+                         ["application", "revision"])
         orientation = session(name="console-history", mode="guided")
         incident = session(name="missing-configmap", mode="guided")
         self.assertEqual(len(server.all_checks(orientation, probe())), len(orientation["pack"]["checks"]))
         self.assertEqual(len(server.all_checks(incident, probe())), len(incident["pack"]["checks"]) + 1)
+
+    def test_next_scenario_follows_curriculum_order_across_level_boundaries(self):
+        expected = {
+            "console-orientation": "console-unhealthy-version",
+            "console-history": "missing-configmap",
+            "missing-configmap": "stuck-sync",
+            "env-drift": "repo-auth",
+            "repo-auth": None,
+        }
+        for current, following in expected.items():
+            with self.subTest(current=current):
+                view = server.build_session_view(session(name=current), {"state": "COMPLETED"}, probe(), False)
+                self.assertEqual(view["next_scenario"], following)
+
+        interleaved = server.CATALOG["scenarios"].copy()
+        interleaved.insert(1, interleaved.pop(interleaved.index("missing-configmap")))
+        with patch.dict(server.CATALOG, {"scenarios": interleaved}):
+            view = server.build_session_view(session(name="console-orientation"), {"state": "COMPLETED"}, probe(), False)
+            self.assertEqual(view["next_scenario"], "console-unhealthy-version")
 
     def test_briefing_and_next_step_explain_the_selected_environment(self):
         run = session(name="env-drift", mode="guided")
@@ -75,6 +101,7 @@ class LearningServiceTests(unittest.TestCase):
         view = server.build_session_view(run, {"state": "READY"}, probe(), False)
         self.assertEqual(view["next_check"]["demo"], {
             "what": "Find and click shop-web-staging in Applications.",
+            "look": "Look for the shop-web-staging card in Applications.",
             "why": "Its name and environment label identify the release we need to verify.",
         })
         self.assertNotIn("${", json.dumps(view["next_check"]["demo"]))
@@ -102,7 +129,7 @@ class LearningServiceTests(unittest.TestCase):
         server.record_action(run, {"sequence": 2, "type": "target_visited",
                                    "details": {"target": "app.header", "application": "shop-web-prod"}}, probe())
         self.assertEqual(run["passed"], {"application"})
-        self.assertEqual(server.next_check(run, probe())["id"], "health")
+        self.assertEqual(server.next_check(run, probe())["id"], "revision")
 
         guided = session(name="console-orientation", mode="guided")
         server.record_action(guided, {"sequence": 1, "type": "target_visited",
@@ -117,6 +144,44 @@ class LearningServiceTests(unittest.TestCase):
                          "An encrypted value blocked the shop release")
         self.assertIn("the selected environment", catalog["hmac-mismatch"]["brief"])
         self.assertNotIn("authentication", catalog["hmac-mismatch"]["brief"].lower())
+
+    def test_unhealthy_release_requires_health_and_deployed_revision(self):
+        run = session(name="console-unhealthy-version", mode="demonstration")
+        unhealthy = probe(False, False)
+        unhealthy["status"]["health"]["status"] = "Progressing"
+        run["passed"] = {"application"}
+        health = server.next_check(run, unhealthy)
+        self.assertEqual(health["id"], "health")
+        self.assertEqual(health["demonstration_answer"], "Progressing")
+        run["passed"].add("health")
+        self.assertEqual(server.next_check(run, unhealthy)["id"], "revision")
+        run["passed"].add("revision")
+        run["note"] = {"resource": run["application"], "evidence": "Progressing health; deployed revision abc123",
+                       "revision": "abc123", "cause": "The workload is failing its readiness probe",
+                       "fix": "No repair requested"}
+        feedback = server.score(run, unhealthy)
+        self.assertEqual(feedback["message"], "Release evidence verified")
+        self.assertFalse(feedback["fixed"])
+        self.assertEqual([step["action"] for step in feedback["debrief_steps"]], [
+            "We found shop-web-prod in Applications.",
+            "We read the Application header.",
+            "We opened History and Rollback.",
+        ])
+        self.assertEqual(feedback["debrief_steps"][1]["finding"], "Argo reports Progressing health.")
+
+    def test_unhealthy_debrief_keeps_the_health_status_the_learner_observed(self):
+        run = session(name="console-unhealthy-version", mode="guided")
+        run["passed"] = {"application"}
+        run["visited"].add("app.header")
+        progressing = probe(False, False)
+        progressing["status"]["health"]["status"] = "Progressing"
+        result = server.record_action(run, {"sequence": 1, "type": "evidence_check_answered",
+                                            "details": {"check_id": "health", "answer": "Progressing"}}, progressing)
+        self.assertTrue(result["correct"])
+        degraded = probe(False, False)
+        degraded["status"]["health"]["status"] = "Degraded"
+        steps = server.score(run, degraded)["debrief_steps"]
+        self.assertEqual(steps[-1]["finding"], "Argo reports Progressing health.")
 
     def test_answer_confirmation_explains_what_the_evidence_means(self):
         run = session(mode="guided")

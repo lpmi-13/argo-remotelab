@@ -11,12 +11,22 @@
     .card{background:#fff;border:1px solid #dce4eb;border-radius:4px;padding:20px;box-shadow:0 2px 9px #1c2d4015}
     .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px}
     label{display:block;font-weight:600;margin-bottom:5px}select,input{width:100%;padding:8px 10px;border:1px solid #bccbd7;border-radius:4px;background:#fff;color:#25313e}
+    .select-wrap{display:block;position:relative}.select-wrap select{appearance:none;-webkit-appearance:none;padding-right:32px}
+    .select-wrap::after{content:"";position:absolute;right:12px;top:50%;width:8px;height:8px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-65%) rotate(45deg);pointer-events:none}
     button{border:1px solid #0a8fbb;background:#0a8fbb;color:#fff;border-radius:4px;min-height:36px;padding:8px 16px;font:inherit;font-weight:600;cursor:pointer}
     button:disabled{opacity:.5;cursor:wait}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #0a8fbb;outline-offset:2px}
     .actions{margin-top:18px;display:flex;gap:12px;align-items:center}.status{min-height:30px;color:#526272}
-    .error{color:#bd413c}.level{margin:20px 0 10px;font-size:16px}.catalog{padding:0;list-style:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
-    .catalog li{background:#fff;border:1px solid #dce4eb;padding:12px;border-radius:4px}.catalog strong{display:block}.catalog small{color:#526272}
-    @media(prefers-color-scheme:dark){:root{background:#172330;color:#f0f5f8}.card,.catalog li{background:#263545;border-color:#46586a}p,.status,.catalog small{color:#c4d0d8}select,input{background:#263545;color:#f0f5f8;border-color:#617385}}
+    .error{color:#bd413c}.level{margin:20px 0 10px;font-size:16px}.catalog{display:grid;gap:10px}
+    .curriculum-level{background:#fff;border:1px solid #dce4eb;border-radius:4px}.level-toggle{display:flex;align-items:center;gap:10px;width:100%;padding:12px 14px;background:transparent;border:0;color:inherit;text-align:left}
+    .level-toggle:hover{background:#f0f5f8}.level-toggle::after{content:"";width:8px;height:8px;margin:0 3px 4px 2px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);transition:transform .36s cubic-bezier(.22,.61,.36,1)}
+    .is-open .level-toggle::after{transform:rotate(225deg)}.level-name{font-size:16px}.level-title,.level-count{color:#526272;font-weight:400}.level-title{margin-left:8px}.level-count{margin-left:auto;white-space:nowrap}
+    .curriculum-level h3{margin:0}.level-panel{display:grid;grid-template-rows:0fr;opacity:0;transition:grid-template-rows .36s cubic-bezier(.22,.61,.36,1),opacity .3s cubic-bezier(.22,.61,.36,1)}
+    .is-open .level-panel{grid-template-rows:1fr;opacity:1}.level-panel-inner{min-height:0;overflow:hidden}.scenario-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:0;padding:0 14px 14px;list-style:none}
+    .scenario-list li{display:flex;overflow:hidden;background:#fff;border:1px solid #dce4eb;border-radius:4px}.scenario-choice{width:100%;padding:12px;background:transparent;border:0;color:inherit;text-align:left;font-weight:400}
+    .scenario-choice:hover{background:#f0f5f8}.scenario-choice[aria-pressed="true"]{background:#eaf7fb;box-shadow:inset 0 0 0 2px #0a8fbb}.scenario-list strong{display:block}.scenario-list small{color:#526272}
+    @media(max-width:500px){.level-title{display:block;margin-left:0}.level-toggle{align-items:center}}
+    @media(prefers-reduced-motion:reduce){.level-panel,.level-toggle::after{transition:none}}
+    @media(prefers-color-scheme:dark){:root{background:#172330;color:#f0f5f8}.card,.curriculum-level,.scenario-list li{background:#263545;border-color:#46586a}p,.status,.scenario-list small,.level-title,.level-count{color:#c4d0d8}.level-toggle:hover,.scenario-choice:hover{background:#34475a}.scenario-choice[aria-pressed="true"]{background:#23475a}select,input{background:#263545;color:#f0f5f8;border-color:#617385}}
   </style>
 </head>
 <body>
@@ -28,27 +38,68 @@
     <form id="launch-form">
       <input type="hidden" id="seed" name="seed">
       <div class="grid">
-        <div><label for="scenario">Scenario</label><select id="scenario" name="scenario"></select></div>
-        <div><label for="mode">Assistance</label><select id="mode" name="mode"><option value="demonstration">Demonstration</option><option value="guided">Guided</option><option value="challenge">Challenge</option></select></div>
-        <div><label for="environment">Environment</label><select id="environment" name="environment"><option value="prod">Production</option><option value="staging">Staging</option></select></div>
+        <div><label for="scenario">Scenario</label><span class="select-wrap"><select id="scenario" name="scenario"></select></span></div>
+        <div><label for="mode">Assistance</label><span class="select-wrap"><select id="mode" name="mode"><option value="demonstration">Demonstration</option><option value="guided">Guided</option><option value="challenge">Challenge</option></select></span></div>
+        <div><label for="environment">Environment</label><span class="select-wrap"><select id="environment" name="environment"><option value="prod">Production</option><option value="staging">Staging</option></select></span></div>
         <div><label for="scenario-key">Scenario key</label><input id="scenario-key" name="scenario_key" placeholder="Random if blank" autocomplete="off"></div>
       </div>
       <div class="actions"><button id="start" type="submit">Prepare lab</button><span id="status" class="status" role="status"></span></div>
       <p class="small">Starting a mission stops any earlier run in this lab.</p>
     </form>
   </section>
-  <h2 class="level">Curriculum</h2><ul id="catalog" class="catalog"></ul>
+  <h2 class="level">Curriculum</h2><div id="catalog" class="catalog"></div>
 </main>
 <script>
   const api='/coach/learning';
   const status=document.querySelector('#status');
   const button=document.querySelector('#start');
-  const escape=value=>String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[char]));
+  const escape=value=>String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+  const shortTitles={
+    'console-orientation':'Find active shop release',
+    'console-unhealthy-version':'Find unhealthy shop version',
+    'console-resources':'Check readiness probe',
+    'console-history':'Check deployed version',
+    'missing-configmap':"Shop pods won't start",
+    'stuck-sync':'Release still syncing',
+    'stale-job':'Shop rollout stalled',
+    'orphaned-resource':'Shop has no endpoints',
+    'sops-decrypt-failure':'Encrypted config fails',
+    'sops-global-mac-mismatch':'Integrity check failed',
+    'hmac-mismatch':'Encrypted value blocks',
+    'wrong-type-sops':'Secrets change blocks',
+    'env-drift':'Environment unhealthy',
+    'repo-auth':"Argo can't fetch source",
+  };
+  function openLevel(level){
+    document.querySelectorAll('.curriculum-level').forEach(section=>{
+      const open=Number(section.dataset.level)===level;
+      section.classList.toggle('is-open',open);
+      section.querySelector('.level-toggle').setAttribute('aria-expanded',String(open));
+      const panel=section.querySelector('.level-panel');
+      panel.inert=!open;
+      panel.setAttribute('aria-hidden',String(!open));
+    });
+  }
+  document.querySelector('#catalog').addEventListener('click',event=>{
+    const toggle=event.target.closest('.level-toggle');
+    if(toggle)openLevel(Number(toggle.closest('.curriculum-level').dataset.level));
+    const choice=event.target.closest('.scenario-choice');
+    if(choice){
+      const select=document.querySelector('#scenario');
+      select.value=choice.dataset.scenario;
+      select.dispatchEvent(new Event('change'));
+    }
+  });
   async function get(path){const response=await fetch(api+path);const data=await response.json();if(!response.ok)throw new Error(data.error||'Request failed');return data}
   async function load(){
     const catalog=await get('/api/catalog');
-    document.querySelector('#scenario').innerHTML=catalog.scenarios.map(item=>`<option value="${escape(item.id)}">Level ${item.level} · ${escape(item.title)}</option>`).join('');
-    document.querySelector('#catalog').innerHTML=catalog.scenarios.map(item=>`<li><strong>Level ${item.level} · ${escape(item.title)}</strong><small>${escape(item.brief)}</small></li>`).join('');
+    const levels=catalog.levels?.length ? catalog.levels : [...new Set(catalog.scenarios.map(item=>item.level))].map(level=>({level,title:''}));
+    document.querySelector('#scenario').innerHTML=levels.map(({level})=>`<optgroup label="Level ${level}">${catalog.scenarios.filter(item=>item.level===level).map(item=>`<option value="${escape(item.id)}">${escape(shortTitles[item.id]||item.title)}</option>`).join('')}</optgroup>`).join('');
+    document.querySelector('#catalog').innerHTML=levels.map(({level,title})=>{
+      const items=catalog.scenarios.filter(item=>item.level===level);
+      return `<section class="curriculum-level" data-level="${level}"><h3><button type="button" class="level-toggle" aria-expanded="false" aria-controls="level-panel-${level}"><span class="level-name">Level ${level} <span class="level-title">${escape(title||'')}</span></span><span class="level-count">${items.length} ${items.length===1?'mission':'missions'}</span></button></h3><div id="level-panel-${level}" class="level-panel" role="region" aria-label="Level ${level} missions" aria-hidden="true" inert><div class="level-panel-inner"><ul class="scenario-list">${items.map(item=>`<li><button type="button" class="scenario-choice" data-scenario="${escape(item.id)}" aria-pressed="false"><strong>${escape(item.title)}</strong><small>${escape(item.brief)}</small></button></li>`).join('')}</ul></div></div></section>`;
+    }).join('');
+    openLevel(1);
     const completed=localStorage.getItem('argo-coach:orientation-complete');
     const params=new URLSearchParams(location.search);
     const requested=params.get('scenario');
@@ -57,6 +108,7 @@
       (nextLevel>0 ? catalog.scenarios.find(item=>item.level>=nextLevel) : null);
     if(selected)document.querySelector('#scenario').value=selected.id;
     else if(!completed)document.querySelector('#scenario').value='console-orientation';
+    if(selected)openLevel(selected.level);
     if(['guided','demonstration','challenge'].includes(params.get('mode')))document.querySelector('#mode').value=params.get('mode');
     if(['prod','staging'].includes(params.get('environment')))document.querySelector('#environment').value=params.get('environment');
     if(/^\d+$/.test(params.get('seed')||''))document.querySelector('#seed').value=params.get('seed');
@@ -86,6 +138,9 @@
     }catch(reason){status.textContent=reason.message;status.classList.add('error');button.disabled=false}
   });
   document.querySelector('#scenario').addEventListener('change',event=>{
+    document.querySelectorAll('.scenario-choice').forEach(choice=>{
+      choice.setAttribute('aria-pressed',String(choice.dataset.scenario===event.target.value));
+    });
     const challenge=document.querySelector('#mode option[value="challenge"]');
     challenge.disabled=event.target.value.startsWith('console-');
     if(challenge.disabled&&document.querySelector('#mode').value==='challenge')document.querySelector('#mode').value='guided';

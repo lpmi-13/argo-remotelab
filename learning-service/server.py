@@ -74,6 +74,8 @@ def load_packs():
                 not all(copy.get(field) for field in ("what", "why"))
                 for copy in demo_steps.values()):
             raise ValueError("incomplete demo narration for " + name)
+        if any(not demo_steps[check["id"]].get("look") for check in pack["checks"]):
+            raise ValueError("missing demo evidence cue for " + name)
         debrief_steps = debrief[name]
         if set(debrief_steps) != expected_demo or any(
                 not all(copy.get(field) for field in ("action", "finding"))
@@ -214,7 +216,7 @@ def make_session(run, mode):
         "run_id": run["id"], "mode": mode, "pack": pack,
         "application": run["application"], "environment": run["environment"],
         "trigger_revision": run.get("trigger_revision", ""),
-        "visited": set(), "passed": set(), "actions": [], "last_sequence": 0,
+        "visited": set(), "passed": set(), "answers": {}, "actions": [], "last_sequence": 0,
         "note": None, "feedback": None, "created_at": time.time(),
     }
     with LOCK:
@@ -287,6 +289,9 @@ def session_view(session, run=None, probe=None, include_token=False):
 
 def build_session_view(session, run, probe, include_token):
     pack = session["pack"]
+    scenarios = [name for level in CATALOG["levels"] for name in CATALOG["scenarios"]
+                 if PACKS[name]["level"] == level["level"]]
+    scenario_index = scenarios.index(pack["id"])
     view = {
         "session_id": session["id"], "run_id": session["run_id"], "mode": session["mode"],
         "seed": run.get("seed"),
@@ -294,6 +299,7 @@ def build_session_view(session, run, probe, include_token):
         "run_updated_at": run.get("updated_at"),
         "application": session["application"], "environment": session["environment"],
         "scenario": {"id": pack["id"], "title": pack["title"], "level": pack["level"]},
+        "next_scenario": scenarios[scenario_index + 1] if scenario_index + 1 < len(scenarios) else None,
         "brief": pack["brief"],
         "briefing": expand(pack["briefing"], context_for(session, probe)),
         "repair": expand(pack["repair"], context_for(session, probe)),
@@ -377,6 +383,7 @@ def record_action(session, action, probe):
         correct = answer_matches(details.get("answer", ""), expected)
         if correct:
             session["passed"].add(check["id"])
+            session.setdefault("answers", {})[check["id"]] = expected
         result.update({"correct": correct,
                        "message": expand(check["learning"], context_for(session, probe))
                        if correct else expand(check["hint"], context_for(session, probe))})
@@ -408,7 +415,7 @@ def debrief_steps(session, probe):
     steps = []
 
     def add_step(check, position):
-        answer = expand(check["answer"], context)
+        answer = session.get("answers", {}).get(check["id"]) or expand(check["answer"], context)
         copy = expand(check["debrief"], {**context, "answer": answer})
         steps.append((position, copy))
 
@@ -521,6 +528,8 @@ def score(session, probe):
     head = probe.get("git_revision", "")
     commits = [action["details"] for action in actions if action["type"] == "commit_pushed" and
                action["details"].get("sha") == head and head != session.get("trigger_revision")]
+    message = "Release evidence verified" if pack["level"] == 1 else (
+        "Deployment fixed" if fixed else "The deployment is still not fixed")
     return {"total": total, "out_of": 100 if total is not None else None, "fixed": fixed, "durable": durable,
             "breakdown": {"remediation": remediation, "console_evidence": console_evidence,
                           "diagnosis": diagnosis, "operational_practice": practice, "efficiency": efficiency},
@@ -533,7 +542,7 @@ def score(session, probe):
             "note": note, "leaked_secret": leaked,
             "assistance": {"hints": sum(action["type"] == "hint_requested" for action in actions),
                            "show_me": sum(action["type"] == "step_demonstrated" for action in actions)},
-            "message": "Deployment fixed" if fixed else "The deployment is still not fixed"}
+            "message": message}
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -815,9 +824,12 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if session["pack"]["level"] == 1 and len(session["passed"]) == len(session["pack"]["checks"]):
                     controller("/api/runs/" + quote(session["run_id"]) + "/state", "POST", {"state": "COMPLETED"})
-                    session["note"] = {"resource": session["application"], "evidence": "Healthy and Synced",
+                    truth = expand(session["pack"]["truth"], context_for(session, probe))
+                    session["note"] = {"resource": truth.get("resource", session["application"]),
+                                       "evidence": truth.get("evidence", "Healthy and Synced"),
                                        "revision": context_for(session, probe)["revision"],
-                                       "cause": "No incident", "fix": "No fix needed"}
+                                       "cause": truth.get("cause", "No incident"),
+                                       "fix": truth.get("fix", "No fix needed")}
                     with LOCK:
                         session["feedback"] = score(session, probe)
                 self.respond(202, {"evaluation": result, "session": session_view(session, probe=probe)})

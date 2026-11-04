@@ -8,7 +8,7 @@
     {"level": 5, "title": "Multi-environment incidents"}
   ],
   "scenarios": [
-    "console-orientation", "console-resources", "console-history",
+    "console-orientation", "console-unhealthy-version", "console-resources", "console-history",
     "missing-configmap", "stuck-sync", "stale-job",
     "orphaned-resource", "sops-decrypt-failure", "sops-global-mac-mismatch",
     "hmac-mismatch", "wrong-type-sops", "env-drift", "repo-auth"
