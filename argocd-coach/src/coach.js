@@ -742,7 +742,8 @@
   }
 
   function resourceScope() {
-    return Array.from(document.querySelectorAll('.sliding-panel')).find(visible) ||
+    return Array.from(document.querySelectorAll('.sliding-panel--opened'))
+      .find(panel => visible(panel.querySelector('.resource-details__header'))) ||
       document.querySelector('.application-node-info') || document;
   }
 
@@ -755,17 +756,17 @@
   }
 
   function resourceEvidenceReady(check) {
-    const drawer = document.querySelector('.application-node-info');
-    if (!visible(drawer)) return false;
+    const drawer = resourceScope();
+    if (drawer === document) return false;
     const tab = new URL(location.href).searchParams.get('tab')?.toLowerCase();
     if (check.target === 'resource.manifest') {
-      const scope = resourceScope();
-      const desired = exactControl('Desired Manifest', scope) || exactControl('Desired', scope);
+      const desired = exactControl('Desired Manifest', drawer) || exactControl('Desired', drawer);
       return Boolean(desired && selectedControl(desired) &&
-        Array.from(drawer.querySelectorAll('.application-node-info__manifest--raw')).some(visible));
+        Array.from(drawer.querySelectorAll('.application-node-info__manifest, .application-node-info__manifest--raw'))
+          .some(visible));
     }
     const label = {'resource.events': 'Events', 'resource.logs': 'Logs', 'resource.summary': 'Summary'}[check.target];
-    const control = exactControl(label, resourceScope());
+    const control = exactControl(label, drawer);
     return control ? selectedControl(control) :
       tab === label.toLowerCase() || (check.target === 'resource.summary' && !tab);
   }
@@ -955,9 +956,9 @@
       'app.operation': '.application-operation-state__message',
       'app.conditions': '.application-conditions',
       'app.tree': '.application-resource-tree__node-title',
-      'resource.events': '.application-node-info',
-      'resource.logs': '.application-node-info',
-      'resource.manifest': '.application-node-info__manifest--raw',
+      'resource.events': '.resource-details__header',
+      'resource.logs': '.resource-details__header',
+      'resource.manifest': '.application-node-info__manifest, .application-node-info__manifest--raw',
     };
     const history = check.target === 'app.history' && document.querySelector('.application-deployment-history');
     const answer = String(check.demonstration_answer || '').toLowerCase();
@@ -969,11 +970,12 @@
     const evidenceScope = {
       'app.operation': '.application-operation-state__message, .application-operation-state__icons_container_padding',
       'app.conditions': '.application-conditions',
-      'resource.events': '.application-node-info',
-      'resource.logs': '.application-node-info',
-      'resource.manifest': '.application-node-info__manifest--raw',
+      'resource.manifest': '.application-node-info__manifest, .application-node-info__manifest--raw',
     }[check.target];
-    const scope = evidenceScope && Array.from(document.querySelectorAll(evidenceScope)).find(visible);
+    const drawer = check.target.startsWith('resource.') ? resourceScope() : null;
+    const scope = drawer && drawer !== document ?
+      (evidenceScope && Array.from(drawer.querySelectorAll(evidenceScope)).find(visible)) || drawer :
+      evidenceScope && Array.from(document.querySelectorAll(evidenceScope)).find(visible);
     const answerMatch = scope && answer && [scope, ...scope.querySelectorAll('*')]
       .filter(element => !element.childElementCount && visible(element) &&
         element.textContent?.toLowerCase().includes(answer))
@@ -981,7 +983,7 @@
     return (check.target === 'apps.list' ? exact(view.application) : null) ||
       (check.target === 'app.header' ? exact(view.health || '') : null) ||
       (check.target === 'app.tree' ? exact(check.demonstration_answer || '') : null) ||
-      historyRevision || answerMatch || history ||
+      historyRevision || answerMatch || history || (drawer !== document && visible(drawer) ? drawer : null) ||
       (check.target === 'settings.repos' ? candidate('gitea.applications.svc.cluster.local') : null) ||
       Array.from(document.querySelectorAll(selectors[check.target] || '.__argo_coach_no_match__')).find(visible) ||
       candidate(({'app.history': 'History', 'app.operation': 'Sync Status',
@@ -1011,7 +1013,8 @@
       {headers: token ? {Authorization: `Bearer ${token}`} : {}});
     if (!response.ok) throw new Error(`Argo CD resource tree returned ${response.status}`);
     const tree = await response.json();
-    const kind = target === 'resource.logs' ? 'Job' : target === 'resource.events' ? 'Pod' : 'Deployment';
+    const kind = target === 'resource.events' && view.scenario.id === 'stale-job' ? 'Job' :
+      target === 'resource.events' || target === 'resource.logs' ? 'Pod' : 'Deployment';
     const nodes = (tree.nodes || []).filter(node => node.kind === kind);
     const node = nodes.find(item => item.health?.status && item.health.status !== 'Healthy') || nodes[0];
     return node ? {id: [node.group || '', node.kind, node.namespace || '', node.name].join('/') + '/0',
@@ -1151,6 +1154,16 @@
     }
     if (target.startsWith('resource.')) {
       try {
+        const operationPanel = Array.from(document.querySelectorAll('.sliding-panel--opened'))
+          .find(panel => visible(panel) && panel.querySelector('.application-operation-state__icons_container_padding'));
+        if (operationPanel) {
+          const close = operationPanel.querySelector('.sliding-panel__close');
+          if (close) {
+            narrateClick(check, 'Close Sync Status to inspect the resource in the tree.');
+            if (!await activate(close, demonstration) && close.isConnected) close.click();
+            return false;
+          }
+        }
         // Argo normalizes the Application URL while its tree is mounting.
         // Navigating to a node before that mount can be overwritten by a
         // later `?resource=` replaceState from Argo itself.
@@ -1177,12 +1190,17 @@
             const destination = new URL(location.href);
             destination.searchParams.set('node', node.id);
             destination.searchParams.set('tab', ({'resource.events': 'events', 'resource.logs': 'logs',
-              'resource.manifest': 'manifest', 'resource.summary': 'summary'})[target]);
+              'resource.manifest': 'summary', 'resource.summary': 'summary'})[target]);
             if (destination.href !== location.href) {
               narrateClick(check, `Open ${node.kind}/${node.name} in ${view.application}'s Tree.`);
               location.href = destination.href;
             }
             return false;
+          }
+          // The node URL updates before Argo mounts its resource drawer.
+          // Wait for the drawer before looking for its Events or Logs tab.
+          for (let attempt = 0; attempt < 40 && resourceScope() === document && !demoStopped; attempt += 1) {
+            await sleep(250);
           }
           if (resourceEvidenceReady(check)) return indicateEvidence(check, demonstration);
           if (target === 'resource.manifest') {
@@ -1207,7 +1225,11 @@
           } else {
             const label = {'resource.events': 'Events', 'resource.logs': 'Logs',
               'resource.summary': 'Summary'}[target];
-            const tab = exactControl(label, resourceScope());
+            let tab = exactControl(label, resourceScope());
+            for (let attempt = 0; attempt < 20 && !tab && !demoStopped; attempt += 1) {
+              await sleep(250);
+              tab = exactControl(label, resourceScope());
+            }
             if (tab && !selectedControl(tab)) {
               narrateClick(check, `Open ${label} on ${node.kind}/${node.name}.`);
               await activate(tab, demonstration);
@@ -1217,13 +1239,18 @@
             if (nodeSelected() && resourceEvidenceReady(check)) return indicateEvidence(check, demonstration);
             await sleep(250);
           }
-          if (demonstration) return stopDemoAt(check, target === 'resource.manifest' ? 'Desired Manifest' :
-            {'resource.events': 'Events', 'resource.logs': 'Logs', 'resource.summary': 'Summary'}[target]);
           const destination = new URL(location.href);
           destination.searchParams.set('node', node.id);
           destination.searchParams.set('tab', ({'resource.events': 'events', 'resource.logs': 'logs',
-            'resource.manifest': 'manifest', 'resource.summary': 'summary'})[target]);
-          if (destination.href !== location.href) location.href = destination.href;
+            'resource.manifest': 'summary', 'resource.summary': 'summary'})[target]);
+          if (destination.href !== location.href && resourceScope().matches('.sliding-panel--opened')) {
+            // A resource can remount while a hook retries. The URL lets Argo
+            // reopen the selected tab on the next mount.
+            location.href = destination.href;
+            return false;
+          }
+          if (demonstration) return stopDemoAt(check, target === 'resource.manifest' ? 'Desired Manifest' :
+            {'resource.events': 'Events', 'resource.logs': 'Logs', 'resource.summary': 'Summary'}[target]);
           return false;
         }
       } catch (_) { /* Keep the on-screen pointer when the tree is unavailable. */ }

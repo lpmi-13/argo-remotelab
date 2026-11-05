@@ -145,10 +145,10 @@
           "reason": "The operation panel orders the sync stages. It tells us whether the failure happened before the Deployment could update.",
           "learning": "The failed phase runs before the main apply, so the rollout cannot advance until that hook succeeds."
         },
-        "log": {
-          "action": "Open the failed migration Job in the tree and read its Logs tab.",
-          "reason": "The phase identifies where the sync stopped; the Job's own output explains why the hook exited.",
-          "learning": "The log line is the direct failure evidence to carry into the Git repair and incident note."
+        "job-event": {
+          "action": "Open the failed migration Job in the tree and read its Events tab.",
+          "reason": "The phase identifies where the sync stopped; the Job event confirms Kubernetes stopped retrying the failed hook.",
+          "learning": "BackoffLimitExceeded confirms the hook failed. Inspect its command in Git before repairing the release."
         }
       },
       "repair": {
@@ -354,7 +354,7 @@
     "stale-job": {
       "application": {"action": "We checked ${application} in Applications.", "finding": "The release was blocked during sync."},
       "hook": {"action": "We opened Sync Status.", "finding": "The ${answer} hook failed."},
-      "log": {"action": "We read the migration Job's Logs.", "finding": "The log reported “${answer}”."},
+      "job-event": {"action": "We read the migration Job's Events.", "finding": "The ${answer} event confirmed that the hook stopped retrying."},
       "repair": {"action": "We fixed the migration hook in Git.", "finding": "Argo completed the rollout."}
     },
     "orphaned-resource": {
@@ -425,7 +425,7 @@
     "stale-job": {
       "application": {"what": "Find and click ${application} in Applications.", "look": "Look for ${application} in Applications.", "why": "The card identifies the ${environment} release blocked before its Deployment updated."},
       "hook": {"what": "Open ${application} → Sync Status; read the failed hook phase.", "look": "Look for the failed hook's phase in Sync Status.", "why": "The operation list shows which hook stopped the rollout."},
-      "log": {"what": "Open ${application} → Tree → migration Job → Logs; read the failure line.", "look": "Look for the migration Job's failure line in Logs.", "why": "The Job log explains why the PreSync hook exited."},
+      "job-event": {"what": "Open ${application} → Tree → migration Job → Events; read the failure reason.", "look": "Look for the BackoffLimitExceeded reason in the Job's Events.", "why": "The Job event confirms that Kubernetes stopped retrying the failed PreSync hook."},
       "repair": {"what": "Fix the migration hook in Git, push the commit, then resync ${application}.", "why": "The failed PreSync Job must succeed before the Deployment can update."}
     },
     "orphaned-resource": {
