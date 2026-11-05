@@ -26,6 +26,15 @@ On macOS, use an isolated Colima k3s cluster. The deployment script creates or r
 
 Prerequisites: Colima with k3s and containerd on macOS, or an installed k3s systemd service on Linux; plus `kubectl`, `helm`, `age-keygen`, `sops`, `jq`, and Docker or `nerdctl` for local image builds. Local development pins Node 24.21.0 in `.nvmrc` and Python 3.14.8 in `.python-version`; deployment images carry their own runtime pins. The script checks the required tools during setup.
 
+On Apple Silicon, install OpenSSH with Apple Silicon Homebrew so Colima can find a native `ssh-keygen` when creating its first VM:
+
+```bash
+brew install openssh
+command -v ssh-keygen
+```
+
+The resolved command should be under `/opt/homebrew/bin`. If it resolves to an Intel Homebrew binary under `/usr/local/bin`, put `/opt/homebrew/bin` before `/usr/local/bin` in `PATH` or invoke deployment with `PATH="/opt/homebrew/bin:$PATH"`. Colima needs `ssh-keygen` during its initial VM startup; a wrong-architecture binary can fail with `bad CPU type in executable`.
+
 ```bash
 bash scripts/deploy-all.sh
 # Later, to remove only this lab's resources:
