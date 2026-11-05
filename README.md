@@ -6,6 +6,12 @@ This recording predates the new curriculum order. The first mission now goes str
 
 Argo RemoteLab teaches a new operator to find deployment evidence in the Argo CD console and use that evidence to repair a GitOps release. The [UI plan](WRAPPING_UI_PLAN.md) describes the curriculum and architecture; [Phase 0 findings](docs/WRAPPING_UI_PHASE0.md) record what has been verified against pinned components and what still needs a running lab. The [ELK-Guide history review](docs/ELK_GUIDE_HISTORY_LESSONS.md) records the lessons applied to this coach.
 
+## First time here?
+
+Argo RemoteLab is a Kubernetes lab that runs locally on your Mac. **Colima** provides a small Linux virtual machine, and **k3s** runs the Kubernetes cluster inside it. Kubernetes uses **containerd** to run containers. The deployment script prepares this cluster and installs the lab's components from this repository; Colima is the local host for the lab, not the lab application itself.
+
+On macOS, you don't need to create the cluster manually: `bash scripts/deploy-all.sh` creates or starts the dedicated Colima profile and deploys the lab into it. The [local setup section](#run-locally) lists prerequisites, explains first-run setup, and shows where to open the lab afterward.
+
 ## Learning modes
 
 | Mode | What happens | Completion |
@@ -45,7 +51,7 @@ Run `bash scripts/deploy-all.sh` for both initial setup and later reruns. When t
 
 Warm deployment resets the current mission while keeping the Colima profile, Argo CD, PostgreSQL, Gitea, persistent volumes, and SOPS key. It restores the Git baseline, waits for the Applications to become Healthy and Synced, and rebuilds first-party images whose source or image tag changed, including the sample Django app. If the local app, chart, or platform source changed, it seeds a new baseline and release history.
 
-The deployment script starts local port-forwards for the lab at `https://localhost:8443/` and Gitea at `http://localhost:3000/`. They keep running after deployment and are stopped by `cleanup-all.sh`. Open the lab URL and accept the local certificate.
+The deployment script starts local port-forwards for the lab gateway at `https://localhost:8443/` and Gitea at `http://localhost:3000/`. Open the lab at `https://localhost:8443/` and Gitea's browser UI at `https://localhost:8443/gitea/`, accepting the local certificate. The direct Gitea port-forward at `http://localhost:3000/` is for deployment scripts and API access; because Gitea is configured under the `/gitea/` path, opening its UI directly there will leave its static assets unstyled. The port-forwards keep running after deployment and are stopped by `cleanup-all.sh`.
 
 Choose a scenario, assistance mode, environment, and optional scenario key. The preparation screen waits for the controller's scenario readiness check and keeps the Argo CD interface out of view until then. It signs in as the scoped `learner` account and opens the briefing automatically. If preparation fails or another run replaces it, the screen shows the reason and links back to the launcher. Direct Argo CD access at `https://localhost:8443/argocd/` still accepts `admin / remotelab` for manual exploration. If you chose another `COLIMA_PROFILE`, replace `colima-argo-remotelab` with `colima-<your-profile>` in the `kubectl` examples below.
 
