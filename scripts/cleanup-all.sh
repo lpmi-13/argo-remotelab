@@ -94,6 +94,7 @@ echo "=== Starting Cleanup ==="
 echo ""
 
 # Switch context
+COLIMA_REGISTRY_REQUIRED=false
 switch_to_local_context || {
     echo "ERROR: cleanup requires a recognized local Kubernetes context" >&2
     exit 1

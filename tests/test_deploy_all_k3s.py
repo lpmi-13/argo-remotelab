@@ -14,7 +14,7 @@ REFRESH_SCRIPT = SCRIPT.parent / "manual-refresh.sh"
 
 class DeployAllK3sStartupTests(unittest.TestCase):
     def run_deploy(self, *args, active=False, start_fails=False, api_never_ready=False,
-                   auth_rejected=False, sudo_valid=True):
+                   auth_rejected=False, sudo_valid=True, warm_check_status=1):
         with tempfile.TemporaryDirectory() as directory:
             temp = Path(directory)
             commands = {
@@ -54,7 +54,8 @@ exit 1
 """,
                 "bash": """#!/bin/sh
 printf 'warm %s\\n' "$*" >> "$CALLS"
-exit 1
+if [ "${2:-}" = --check ]; then exit "$WARM_CHECK_STATUS"; fi
+exit 0
 """,
                 "sleep": "#!/bin/sh\nexit 0\n",
                 "uname": "#!/bin/sh\nprintf 'Linux\\n'\n",
@@ -77,6 +78,7 @@ exit 1
                 API_NEVER_READY="1" if api_never_ready else "0",
                 AUTH_REJECTED="1" if auth_rejected else "0",
                 SUDO_VALID="1" if sudo_valid else "0",
+                WARM_CHECK_STATUS=str(warm_check_status),
             )
             if active:
                 (temp / "started").touch()
@@ -99,6 +101,23 @@ exit 1
         self.assertLess(calls.index("systemctl start k3s"), api_checks[0])
         self.assertGreaterEqual(len(api_checks), 2)
         self.assertLess(api_checks[1], warm_check)
+
+    def test_default_command_selects_warm_deployment_when_ready(self):
+        result, calls = self.run_deploy(active=True, warm_check_status=0)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("Existing lab is ready; running warm deployment", result.stdout)
+        warm_calls = [call for call in calls if call.startswith("warm ")]
+        self.assertEqual(len(warm_calls), 2)
+        self.assertTrue(warm_calls[0].endswith(" --check"))
+        self.assertFalse(warm_calls[1].endswith(" --check"))
+        self.assertFalse(any(call.startswith("kubectl get nodes") for call in calls))
+
+    def test_default_command_does_not_rebuild_on_warm_setup_error(self):
+        result, calls = self.run_deploy(active=True, warm_check_status=2)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("full deployment was not started", result.stderr)
+        self.assertEqual(sum(call.startswith("warm ") for call in calls), 1)
+        self.assertFalse(any(call.startswith("kubectl get nodes") for call in calls))
 
     def test_running_k3s_is_not_started_again(self):
         result, calls = self.run_deploy("--full", active=True)
@@ -209,13 +228,16 @@ if check_api_services_available; then echo healthy; else echo blocked; fi
 
 
 class ColimaProfileStatusTests(unittest.TestCase):
-    def run_profile_lookup(self, output, profile="argo-remotelab"):
+    def run_profile_lookup(self, output, profile="argo-remotelab", status_ok=True):
         with tempfile.TemporaryDirectory() as directory:
             temp = Path(directory)
             colima = temp / "colima"
             colima.write_text(
                 "#!/bin/sh\n"
-                "printf '%s' \"$COLIMA_JSON\"\n"
+                "case \"$1\" in\n"
+                "  list) printf '%s' \"$COLIMA_JSON\" ;;\n"
+                "  status) [ \"$COLIMA_STATUS_OK\" = 1 ] ;;\n"
+                "esac\n"
             )
             colima.chmod(0o755)
             harness = (
@@ -228,6 +250,7 @@ class ColimaProfileStatusTests(unittest.TestCase):
                     **os.environ,
                     "PATH": f"{temp}:{os.environ['PATH']}",
                     "COLIMA_JSON": output,
+                    "COLIMA_STATUS_OK": "1" if status_ok else "0",
                 },
                 capture_output=True,
                 text=True,
@@ -255,6 +278,20 @@ class ColimaProfileStatusTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout.strip(), "Stopped")
+
+    def test_false_broken_listing_uses_direct_status(self):
+        result = self.run_profile_lookup(
+            '{"name":"argo-remotelab","status":"Broken"}', status_ok=True,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "Running")
+
+    def test_truly_broken_listing_is_not_masked(self):
+        result = self.run_profile_lookup(
+            '{"name":"argo-remotelab","status":"Broken"}', status_ok=False,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "Broken")
 
 
 class ManualRefreshTests(unittest.TestCase):

@@ -1,5 +1,6 @@
 #!/bin/bash
 # Platform detection and cross-platform utilities
+source "$(dirname "${BASH_SOURCE[0]}")/colima-network.sh"
 
 detect_platform() {
     case "$(uname -s)" in
@@ -42,10 +43,10 @@ is_colima() {
 
 colima_profile_status() {
     local profile="$1"
-    local profile_json
+    local profile_json reported_status
 
     profile_json=$(env -u COLIMA_PROFILE colima list --json 2>/dev/null) || return 1
-    printf '%s' "$profile_json" | python3 -c '
+    reported_status=$(printf '%s' "$profile_json" | python3 -c '
 import json, sys
 
 raw = sys.stdin.read().strip()
@@ -71,7 +72,16 @@ for item in profiles:
     if isinstance(item, dict) and item.get("name") == sys.argv[1]:
         print(item.get("status", ""))
         break
-' "$profile"
+' "$profile") || return 1
+
+    # Lima may report Broken when its status inspection is denied, even though
+    # the VM is running. A direct Colima status check resolves that ambiguity.
+    if [[ "$reported_status" == Broken ]] && colima status --profile "$profile" >/dev/null 2>&1; then
+        reported_status=Running
+    fi
+    if [[ -n "$reported_status" ]]; then
+        printf '%s\n' "$reported_status"
+    fi
 }
 
 detect_local_context() {
@@ -94,6 +104,10 @@ check_kubernetes_available() {
 switch_to_local_context() {
     local target_context
     target_context=$(detect_local_context)
+    # Cleanup can skip registry access; deployments need it before changing the lab.
+    if [[ "$PLATFORM" == "macos" && "${COLIMA_REGISTRY_REQUIRED:-true}" == true ]]; then
+        ensure_colima_registry_access "${COLIMA_PROFILE:-argo-remotelab}" || return $?
+    fi
     if ! kubectl config get-contexts "$target_context" -o name 2>/dev/null | grep -Fxq "$target_context"; then
         error "Local Kubernetes context ${target_context} is missing"
         return 1

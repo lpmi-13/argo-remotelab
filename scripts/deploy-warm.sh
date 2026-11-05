@@ -19,6 +19,9 @@ reset_run_id=""
 
 fail() {
   echo "ERROR: $*" >&2
+  if [[ "$check_only" == true && "$COLIMA_REFRESHED" == true ]]; then
+    exit 2
+  fi
   exit 1
 }
 
@@ -167,7 +170,15 @@ if [[ "$PLATFORM" == macos ]]; then
     *) invalid_setup "Colima profile $colima_profile is $colima_status; repair it before deployment" ;;
   esac
 fi
-switch_to_local_context || fail "the lab Kubernetes context is unavailable"
+if switch_to_local_context; then
+  :
+else
+  setup_status=$?
+  if (( setup_status == 2 )); then
+    exit 2
+  fi
+  fail "the lab Kubernetes context is unavailable"
+fi
 
 echo "Step 1: Checking the existing lab..."
 for namespace in argocd applications shop-staging; do
@@ -180,8 +191,22 @@ for target in argocd/argocd-server argocd/argocd-repo-server \
               kube-system/traefik; do
   namespace="${target%%/*}"
   deployment="${target#*/}"
-  kubectl -n "$namespace" rollout status "deployment/$deployment" --timeout=15s >/dev/null ||
+  if ! kubectl -n "$namespace" get "deployment/$deployment" -o name >/dev/null 2>&1; then
+    fail "$target is missing"
+  fi
+  rollout_timeout=15s
+  if [[ "$check_only" == true ]]; then
+    rollout_timeout=60s
+  fi
+  if [[ "$COLIMA_REFRESHED" == true ]]; then
+    rollout_timeout=180s
+  fi
+  if ! kubectl -n "$namespace" rollout status "deployment/$deployment" --timeout="$rollout_timeout" >/dev/null; then
+    if [[ "$check_only" == true ]]; then
+      invalid_setup "$target exists but is not ready; inspect its pods, then rerun deploy-all.sh"
+    fi
     fail "$target is not ready"
+  fi
 done
 expected_dependencies_hash="$(python3 "$hash_script" dependencies)"
 deployed_dependencies_hash="$(kubectl -n argocd get configmap remotelab-deploy-state \

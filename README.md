@@ -47,7 +47,27 @@ bash scripts/deploy-all.sh
 bash scripts/cleanup-all.sh
 ```
 
-Run `bash scripts/deploy-all.sh` for both initial setup and later reruns. When the existing lab is ready and its infrastructure dependency pins match this checkout, it selects a warm deployment; otherwise it runs the full setup and recreates the lab namespaces. Use `--full` to request a complete rebuild explicitly. PostgreSQL 16 volumes need a data migration before PostgreSQL 18 can reuse them; `--skip-cleanup` stops if it finds an older PostgreSQL deployment, and the database pod checks the volume version before startup. Use `--full` for a disposable lab.
+Run `bash scripts/deploy-all.sh` for both initial setup and later reruns; it
+checks warm deployment readiness automatically. When the existing lab is ready
+and its infrastructure dependency pins match this checkout, it selects a warm
+deployment. If lab resources are missing or infrastructure pins changed, it
+runs the full setup and recreates the lab namespaces. An existing deployment
+that is temporarily unready stops the run before cleanup. Use `--full` to
+request a complete rebuild explicitly. PostgreSQL 16 volumes need a data
+migration before PostgreSQL 18 can reuse them; `--skip-cleanup` stops if it
+finds an older PostgreSQL deployment, and the database pod checks the volume
+version before startup. Use `--full` for a disposable lab.
+
+On macOS, deployment checks registry access from inside the Colima VM and
+retries brief failures. If only the lab profile has a persistent failure, it
+restarts that profile and waits for Kubernetes. If the lab and default profiles
+both lose access while the Mac can reach the registry, it stops and starts
+both profiles to refresh their shared Lima network. It restores default-profile
+containers that were running with Docker's `restart=no` or `on-failure` policy.
+The script checks access again before restarting and prints the failed probe
+if recovery does not work. If the Mac itself cannot reach the registry, it
+reports the host failure without disrupting Colima. Other running profiles
+are left alone.
 
 Warm deployment resets the current mission while keeping the Colima profile, Argo CD, PostgreSQL, Gitea, persistent volumes, and SOPS key. It restores the Git baseline, waits for the Applications to become Healthy and Synced, and rebuilds first-party images whose source or image tag changed, including the sample Django app. If the local app, chart, or platform source changed, it seeds a new baseline and release history.
 
