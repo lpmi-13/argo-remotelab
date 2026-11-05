@@ -157,17 +157,9 @@ done
 
 if [[ "$PLATFORM" == macos ]]; then
   command -v colima >/dev/null 2>&1 || invalid_setup "Colima is required"
-  if ! colima_json="$(env -u COLIMA_PROFILE colima list --json 2>/dev/null)"; then
+  if ! colima_status="$(colima_profile_status "$colima_profile")"; then
     invalid_setup "could not list Colima profiles"
   fi
-  colima_status="$(printf '%s\n' "$colima_json" | python3 -c '
-import json, sys
-for line in sys.stdin:
-    item = json.loads(line)
-    if item.get("name") == sys.argv[1]:
-        print(item.get("status", ""))
-        break
-' "$colima_profile")"
   case "$colima_status" in
     Running) ;;
     Stopped) colima start --profile "$colima_profile" --activate=false --cpu 4 ;;

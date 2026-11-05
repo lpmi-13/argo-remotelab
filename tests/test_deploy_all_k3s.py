@@ -208,6 +208,55 @@ if check_api_services_available; then echo healthy; else echo blocked; fi
                     self.assertIn("v1beta1.metrics.k8s.io: MissingEndpoints", result.stderr)
 
 
+class ColimaProfileStatusTests(unittest.TestCase):
+    def run_profile_lookup(self, output, profile="argo-remotelab"):
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            colima = temp / "colima"
+            colima.write_text(
+                "#!/bin/sh\n"
+                "printf '%s' \"$COLIMA_JSON\"\n"
+            )
+            colima.chmod(0o755)
+            harness = (
+                f'source "{SCRIPT.parent / "lib/platform.sh"}"\n'
+                f'colima_profile_status "{profile}"'
+            )
+            return subprocess.run(
+                ["/bin/bash", "-c", harness],
+                env={
+                    **os.environ,
+                    "PATH": f"{temp}:{os.environ['PATH']}",
+                    "COLIMA_JSON": output,
+                },
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+
+    def test_empty_output_means_no_profile(self):
+        result = self.run_profile_lookup("")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+
+    def test_json_array_finds_profile_status(self):
+        result = self.run_profile_lookup(
+            '[{"name":"other","status":"Running"},'
+            '{"name":"argo-remotelab","status":"Stopped"}]'
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "Stopped")
+
+    def test_json_lines_find_profile_status(self):
+        result = self.run_profile_lookup(
+            '{"name":"other","status":"Running"}\n'
+            '{"name":"argo-remotelab","status":"Stopped"}\n'
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "Stopped")
+
+
 class ManualRefreshTests(unittest.TestCase):
     def run_refresh(self, *, contexts="default", fresh_content="fresh"):
         with tempfile.TemporaryDirectory() as directory:

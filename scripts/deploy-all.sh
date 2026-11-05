@@ -366,19 +366,10 @@ if [[ "$OS" == "Darwin" ]]; then
         exit 1
     fi
 
-    if ! COLIMA_JSON=$(env -u COLIMA_PROFILE colima list --json 2>/dev/null); then
+    if ! COLIMA_STATUS=$(colima_profile_status "$COLIMA_PROFILE"); then
         echo "  ERROR: Could not list Colima profiles" >&2
         exit 1
     fi
-    COLIMA_STATUS=$(printf '%s\n' "$COLIMA_JSON" | python3 -c '
-import json, sys
-profile = sys.argv[1]
-for line in sys.stdin:
-    item = json.loads(line)
-    if item.get("name") == profile:
-        print(item.get("status", ""))
-        break
-' "$COLIMA_PROFILE")
     case "$COLIMA_STATUS" in
         Running) ;;
         Stopped) colima start --profile "$COLIMA_PROFILE" --activate=false --cpu 4 ;;
