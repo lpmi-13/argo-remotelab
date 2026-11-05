@@ -40,6 +40,40 @@ is_colima() {
     [[ "$PLATFORM" == "macos" ]] && command -v colima &>/dev/null && colima status &>/dev/null
 }
 
+colima_profile_status() {
+    local profile="$1"
+    local profile_json
+
+    profile_json=$(env -u COLIMA_PROFILE colima list --json 2>/dev/null) || return 1
+    printf '%s' "$profile_json" | python3 -c '
+import json, sys
+
+raw = sys.stdin.read().strip()
+if not raw:
+    raise SystemExit(0)
+
+try:
+    profiles = json.loads(raw)
+except json.JSONDecodeError:
+    try:
+        profiles = [json.loads(line) for line in raw.splitlines() if line.strip()]
+    except json.JSONDecodeError as error:
+        print(f"Invalid JSON from `colima list --json`: {error}", file=sys.stderr)
+        raise SystemExit(1)
+
+if isinstance(profiles, dict):
+    profiles = [profiles]
+if not isinstance(profiles, list):
+    print("Unexpected JSON from `colima list --json`", file=sys.stderr)
+    raise SystemExit(1)
+
+for item in profiles:
+    if isinstance(item, dict) and item.get("name") == sys.argv[1]:
+        print(item.get("status", ""))
+        break
+' "$profile"
+}
+
 detect_local_context() {
     if [[ "$PLATFORM" == "macos" ]]; then
         local profile="${COLIMA_PROFILE:-argo-remotelab}"
