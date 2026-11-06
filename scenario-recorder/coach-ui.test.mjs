@@ -770,10 +770,15 @@ test('launcher keeps Argo CD closed until the scenario is ready, then starts the
 
     await page.goto('http://lab.test/');
     await page.locator('#scenario option[value="console-history"]').waitFor({state: 'attached'});
+    assert.equal(await page.locator('#scenario option[value="console-history"]').textContent(),
+      'Read the release history');
+    assert.equal(await page.locator('.scenario-choice[data-scenario="console-history"] strong').textContent(),
+      'Read the release history');
     await page.locator('#start').click();
     await page.waitForURL('**/preparing.html');
     await page.waitForFunction(() => document.querySelector('#status')?.textContent?.includes('Restoring'));
     assert.match(await page.locator('h1').innerText(), /Scenario is loading/);
+    assert.equal(await page.locator('#mission-name').textContent(), 'Read the release history');
     assert.ok(await page.locator('.swimmer').count() >= 10);
     assert.equal(argoRequests, 0, 'Argo CD must not load during preparation');
     assert.equal(authRequests, 0, 'Argo CD sign-in waits until readiness');
@@ -826,9 +831,16 @@ test('failed preparation stays on the loading page and offers a return to missio
   const page = await browser.newPage();
   let argoRequests = 0;
   try {
-    await page.addInitScript(() => sessionStorage.setItem('argo-coach:preparing', JSON.stringify({
-      run_id: 'run-1', session_id: 'session-1', token: 'test-token', mode: 'guided', title: 'Shop incident',
-    })));
+    await page.addInitScript(() => {
+      sessionStorage.setItem('argo-coach:preparing', JSON.stringify({
+        run_id: 'run-1', session_id: 'session-1', token: 'test-token', mode: 'guided',
+        title: 'Missing ConfigMap',
+      }));
+      sessionStorage.setItem('argo-coach:initial-view:session-1', JSON.stringify({
+        scenario: {id: 'missing-configmap', title: 'Missing ConfigMap', level: 2},
+        briefing: {headline: 'Shop pods are failing to start'},
+      }));
+    });
     await page.route('**/*', route => {
       const path = new URL(route.request().url()).pathname;
       if (path === '/preparing.html') return route.fulfill({contentType: 'text/html', body: preparationPage});
@@ -840,6 +852,8 @@ test('failed preparation stays on the loading page and offers a return to missio
     });
     await page.goto('http://lab.test/preparing.html');
     await page.locator('#return:visible').waitFor();
+    assert.equal(await page.locator('#mission-name').textContent(), 'Shop pods are failing to start');
+    assert.doesNotMatch(await page.locator('main').innerText(), /Missing ConfigMap/);
     assert.match(await page.locator('#status').innerText(), /Baseline did not recover/);
     assert.equal(new URL(page.url()).pathname, '/preparing.html');
     assert.equal(argoRequests, 0);
@@ -869,6 +883,78 @@ test('terminal button follows the mission repair surface and mode', {timeout: 30
       assert.equal(await page.locator('#argocd-coach-host [data-action="terminal"]').count(),
         Number(expected), `${mode} / ${fixSurface}`);
     }
+  } finally { await browser.close(); }
+});
+
+test('demonstration shows the broken Git source and real commit before returning to Argo', {timeout: 30000}, async () => {
+  const trigger = 'a'.repeat(40);
+  const commit = 'b'.repeat(40);
+  const sourcePath = 'chart/django-app/templates/deployment.yaml';
+  const sourceURL = `/gitea/remotelab/django-app/src/commit/${trigger}/${sourcePath}`;
+  const commitURL = `/gitea/remotelab/django-app/commit/${commit}`;
+  const appURL = '/argocd/applications/argocd/shop-web-prod';
+  const browser = await launchBrowser();
+  const page = await browser.newPage({viewport: {width: 1200, height: 750}, reducedMotion: 'reduce'});
+  let fixCalls = 0;
+  let view = {...session('demonstration'), state: 'INVESTIGATING',
+    scenario: {id: 'missing-configmap', title: 'Shop pods are failing to start', level: 2},
+    checks_passed: 2, checks_total: 3, fixed: false, next_check: null,
+    fix_surface: 'git', fix_paths: [sourcePath], trigger_revision: trigger, revision: trigger,
+    repair: {action: 'Restore the ConfigMap reference in Git.', reason: 'Repair desired state.'}};
+  await page.addInitScript(() => {
+    sessionStorage.setItem('argo-coach:handoff', JSON.stringify({session: 'session-1', token: 'test-token'}));
+    sessionStorage.setItem('argo-coach:started:session-1', 'true');
+    window.WebSocket = undefined;
+    window.GuidedStepClock = class { stepId = null; start(id) { this.stepId = id; } stop() {} input() {} };
+    window.ArgoActionObserver = class { fromURL() {} };
+    window.ArgoCoachTheme = {followTheme() {}};
+  });
+  await page.route('**/*', route => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname === appURL) return route.fulfill({contentType: 'text/html',
+      body: '<html><body><main>shop-web-prod</main><script src="/coach/assets/coach.js"></script></body></html>'});
+    if (pathname === sourceURL) return route.fulfill({contentType: 'text/html',
+      body: '<html><body><main><code>name: django-app-missing-config</code></main><script src="/coach/assets/coach.js"></script></body></html>'});
+    if (pathname === commitURL) return route.fulfill({contentType: 'text/html',
+      body: `<html><body><main><h3>fix: restore the affected deployment chart</h3>
+        <a href="#diff">${sourcePath}</a><code>- name: django-app-missing-config</code></main>
+        <script src="/coach/assets/coach.js"></script></body></html>`});
+    if (pathname === '/coach/assets/coach.js') return route.fulfill({contentType: 'text/javascript', body: coach});
+    if (pathname.startsWith('/coach/assets/ui/')) return route.fulfill({contentType: 'text/css',
+      body: styles.get(pathname.split('/').at(-1)) || ''});
+    if (pathname === '/coach/learning/api/sessions/session-1/demonstrate-fix') {
+      fixCalls += 1;
+      view = {...view, state: 'FIXED', fixed: true, revision: commit,
+        next_check: {id: 'verify-revision', target: 'app.history', where: 'History and Rollback',
+          action: 'Read the deployed revision.', reason: 'Confirm the deployed commit.',
+          demonstration_answer: commit, available: false}};
+      return route.fulfill({json: {commit, diff: `- name: django-app-missing-config\n`}});
+    }
+    if (pathname === '/coach/learning/api/sessions/session-1') return route.fulfill({json: view});
+    return route.fulfill({status: 404, body: ''});
+  });
+  try {
+    await page.goto('http://lab.test' + appURL);
+    await page.locator('#argocd-coach-host .demo-timer:not([hidden])').waitFor();
+    await page.locator('#argocd-coach-host [data-action="advance"]').click({noWaitAfter: true});
+    await page.waitForURL('http://lab.test' + sourceURL);
+    await page.locator('#argocd-coach-host .demo-explanation').getByText(/coach will restore the broken ConfigMap reference/).waitFor();
+    assert.equal(fixCalls, 0);
+    await page.locator('#argocd-coach-host [data-action="pause-demo"]').click();
+    assert.equal(await page.locator('#argocd-coach-host [data-action="advance"]').isDisabled(), true);
+    await page.locator('#argocd-coach-host [data-action="pause-demo"]').click();
+    await page.locator('#argocd-coach-host [data-action="advance"]').click({noWaitAfter: true});
+    await page.waitForURL('http://lab.test' + commitURL);
+    await page.locator('#argocd-coach-host .demo-explanation').getByText(/showing commit bbbbbbbbbb/).waitFor();
+    assert.equal(fixCalls, 1);
+    await page.reload();
+    await page.locator('#argocd-coach-host .demo-timer:not([hidden])').waitFor();
+    await page.locator('#argocd-coach-host [data-action="advance"]').click({noWaitAfter: true});
+    await page.waitForURL('http://lab.test' + appURL);
+    await page.locator('#argocd-coach-host .demo-explanation').getByText(/Read the deployed revision/).waitFor();
+    assert.equal(fixCalls, 1);
+    assert.equal(await page.evaluate(() => sessionStorage.getItem('argo-coach:demo-git:session-1')), null);
+    assert.equal(await page.locator('#argocd-coach-host .demo-patch a').getAttribute('href'), commitURL);
   } finally { await browser.close(); }
 });
 
@@ -933,7 +1019,9 @@ test('replay starts the same mission in every mode with a fresh key', {timeout: 
     const {browser, page} = fixturePage;
     try {
       const completed = {...session(mode),
-        scenario: {id: 'missing-configmap', title: 'Shop pods won\'t start', level: 2},
+        scenario: {id: 'missing-configmap', title: 'Shop pods are failing to start', level: 2},
+        briefing: {source: 'Pod startup alert', headline: 'Shop pods are failing to start',
+          summary: 'New staging shop pods are failing to start after a release.'},
         environment: 'staging', seed: 111, state: 'COMPLETED',
         feedback: {total: 82, fixed: true, durable: true, debrief_steps: []}};
       fixturePage.setView(completed);
@@ -958,15 +1046,14 @@ test('replay starts the same mission in every mode with a fresh key', {timeout: 
       assert.deepEqual(requests, [{
         scenario: 'missing-configmap', mode, environment: 'staging', replace_existing: true,
       }]);
-      assert.equal(await page.locator('#mission-name').textContent(), 'Shop pods won\'t start');
+      assert.equal(await page.locator('#mission-name').textContent(), 'Shop pods are failing to start');
       assert.deepEqual(await page.evaluate(() => ({
         pending: JSON.parse(sessionStorage.getItem('argo-coach:preparing')),
         initial: JSON.parse(sessionStorage.getItem('argo-coach:initial-view:session-2')),
         oldHandoff: sessionStorage.getItem('argo-coach:handoff'),
         oldView: sessionStorage.getItem('argo-coach:initial-view:session-1'),
       })), {
-        pending: {run_id: 'run-2', session_id: 'session-2', token: 'new-token', mode,
-          title: 'Shop pods won\'t start'},
+        pending: {run_id: 'run-2', session_id: 'session-2', token: 'new-token', mode},
         initial: {...completed, session_id: 'session-2', run_id: 'run-2', seed: 222,
           state: 'CREATED', feedback: null},
         oldHandoff: null, oldView: null,

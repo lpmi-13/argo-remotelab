@@ -111,7 +111,7 @@
     <p class="eyebrow">Preparing your mission</p>
     <h1 id="heading">Scenario is loading…</h1>
     <p class="description">The lab is setting up your environment and waiting for the mission evidence to appear. Argo CD will open automatically when it is ready.</p>
-    <div class="mission"><span>Selected mission</span><strong id="mission-name">Loading mission…</strong></div>
+    <div class="mission"><span>Selected mission</span><strong id="mission-name">Argo CD mission</strong></div>
     <div class="track" id="progress" role="progressbar" aria-label="Scenario preparation in progress"></div>
     <p id="status" role="status" aria-live="polite">Connecting to the lab…</p>
     <a id="return" href="/" hidden>Back to missions</a>
@@ -125,8 +125,54 @@
       const mission=document.querySelector('#mission-name');
       const progress=document.querySelector('#progress');
       const returnLink=document.querySelector('#return');
+      const ocean=document.querySelector('.ocean');
+      const revisions=[...ocean.querySelectorAll('.revision')];
+      const revisionOrder=[...revisions];
+      for(let i=revisionOrder.length-1;i>0;i--){
+        const j=Math.floor(Math.random()*(i+1));
+        [revisionOrder[i],revisionOrder[j]]=[revisionOrder[j],revisionOrder[i]];
+      }
+      const gapWeights=Array.from({length:revisions.length+1},()=>.5+Math.random());
+      function placeRevisions(){
+        const mobile=matchMedia('(max-width:520px)').matches;
+        const edge=12;
+        const minimumGap=40;
+        const available=Math.max(0,ocean.clientWidth-2*edge);
+        const placed=[];
+        let occupied=0;
+        for(const revision of revisionOrder){
+          if(mobile&&revision.classList.contains('mobile-hide'))continue;
+          const size=mobile
+            ? parseFloat(revision.style.getPropertyValue('--mobile-size'))||64
+            : parseFloat(revision.style.getPropertyValue('--size'))||80;
+          const drift=parseFloat(revision.style.getPropertyValue('--drift'))||0;
+          // Reserve the whole horizontal path, including the 10px midpoint drift and 1.08x scale.
+          const leftReach=Math.min(0,10,drift)-size*.04;
+          const rightReach=Math.max(0,10,drift)+size*.04;
+          const footprint=size+rightReach-leftReach;
+          const required=footprint+(placed.length?minimumGap:0);
+          if(occupied+required>available)continue;
+          placed.push({revision,leftReach,footprint});
+          occupied+=required;
+        }
+        const visible=new Set(placed.map(({revision})=>revision));
+        for(const revision of revisions)revision.hidden=!visible.has(revision);
+        const slack=available-occupied;
+        const weights=gapWeights.slice(0,placed.length+1);
+        const weightTotal=weights.reduce((sum,weight)=>sum+weight,0);
+        let cursor=edge+slack*weights[0]/weightTotal;
+        placed.forEach(({revision,leftReach,footprint},index)=>{
+          revision.style.setProperty('--left',`${cursor-leftReach}px`);
+          cursor+=footprint;
+          if(index<placed.length-1)cursor+=minimumGap+slack*weights[index+1]/weightTotal;
+        });
+      }
+      placeRevisions();
+      addEventListener('resize',placeRevisions);
       let pending;
       try{pending=JSON.parse(sessionStorage.getItem(key)||'null')}catch(_){pending=null}
+      let initialView;
+      try{initialView=JSON.parse(sessionStorage.getItem('argo-coach:initial-view:'+pending?.session_id)||'null')}catch(_){initialView=null}
       const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
       function setStatus(message){if(status.textContent!==message)status.textContent=message}
       function fail(message){
@@ -141,7 +187,8 @@
         fail('No mission is being prepared in this tab.');
         return;
       }
-      mission.textContent=pending.title||'Argo CD mission';
+      // Old preparation records may contain an internal title; use the public briefing instead.
+      mission.textContent=initialView?.briefing?.headline||'Argo CD mission';
       const phase={CREATED:'Starting the mission…',RESETTING:'Restoring the shop environment…',
         INJECTING:'Applying the scenario changes…',AWAITING_DETECTION:'Waiting for the scenario evidence to appear…'};
       async function watch(){

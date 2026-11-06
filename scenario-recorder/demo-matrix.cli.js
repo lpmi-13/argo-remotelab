@@ -8,6 +8,7 @@ async (page) => {
   });
   const selection = await page.evaluate(() => Object.fromEntries(new URL(location.href).searchParams));
   const environment = selection.environment || 'prod';
+  const autoplay = selection.autoplay === '1';
   if (!['prod', 'staging'].includes(environment)) throw new Error(`Unknown environment ${environment}`);
   const scenarios = catalog.filter(([id, level]) =>
     (!selection.scenario || selection.scenario === id) &&
@@ -16,6 +17,8 @@ async (page) => {
   const results = [];
   for (const [scenario, level] of scenarios) {
     const observations = [];
+    let gitSourceSeen = false;
+    let gitCommit = '';
     let outcome = 'timed out';
     try {
       await page.goto(baseURL + '/', {waitUntil: 'domcontentloaded'});
@@ -27,7 +30,7 @@ async (page) => {
         const button = document.querySelector('#argocd-coach-host')?.shadowRoot?.querySelector('[data-action="begin"]');
         return button && !button.disabled;
       }, null, {timeout: 600000});
-      await page.locator('#argocd-coach-host [data-action="begin"]').click();
+      if (!autoplay) await page.locator('#argocd-coach-host [data-action="begin"]').click();
       for (let turn = 0; turn < 600; turn += 1) {
         let state;
         try {
@@ -43,6 +46,7 @@ async (page) => {
               url: location.href,
               check: session.next_check?.id,
               available: session.next_check?.available,
+              revision: session.revision,
               state: session.state,
               message: root?.querySelector('.message.error[role="status"]')?.textContent,
               debrief: Boolean(root?.querySelector('#debrief-title')),
@@ -57,6 +61,9 @@ async (page) => {
           }
           throw error;
         }
+        if (/\/gitea\/remotelab\/django-app\/src\/commit\/[0-9a-f]{40}\//.test(state.url)) gitSourceSeen = true;
+        const commitView = state.url.match(/\/gitea\/remotelab\/django-app\/commit\/([0-9a-f]{40})(?:[?#]|$)/);
+        if (commitView) gitCommit = commitView[1];
         if (observations.at(-1)?.check !== state.check || state.message || state.debrief) {
           observations.push({check: state.check, available: state.available,
             state: state.state, message: state.message, url: state.url});
@@ -68,6 +75,10 @@ async (page) => {
             return (await response.json()).state;
           });
           outcome = runState === 'COMPLETED' ? 'completed' : `debrief with run ${runState}`;
+          if (scenario === 'missing-configmap' && outcome === 'completed' &&
+              (!gitSourceSeen || !gitCommit || gitCommit !== state.revision)) {
+            outcome = `Git demonstration incomplete: source=${gitSourceSeen}, commit=${gitCommit}, deployed=${state.revision}`;
+          }
           break;
         }
         if (state.message) { outcome = 'demo error'; break; }
@@ -75,8 +86,8 @@ async (page) => {
           outcome = state.state;
           break;
         }
-        if (state.canAdvance) {
-          await page.locator('#argocd-coach-host [data-action="advance"]').click({timeout: 1000})
+        if (state.canAdvance && !autoplay) {
+          await page.locator('#argocd-coach-host [data-action="advance"]').click({timeout: 1000, noWaitAfter: true})
             .catch(() => {});
         }
         await page.waitForTimeout(1000);

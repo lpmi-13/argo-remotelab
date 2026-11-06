@@ -164,8 +164,8 @@
     "orphaned-resource": {
       "briefing": {
         "source": "Service availability alert",
-        "headline": "A workload rename left the shop service without endpoints",
-        "summary": "A workload rename left the ${environment} shop service with no ready endpoints."
+        "headline": "The shop service has no ready endpoints",
+        "summary": "The ${environment} shop service has no ready endpoints after a release."
       },
       "steps": {
         "application": {
@@ -210,7 +210,7 @@
     "sops-global-mac-mismatch": {
       "briefing": {
         "source": "Argo comparison alert",
-        "headline": "Encrypted values failed an integrity check",
+        "headline": "Argo CD cannot compare an encrypted update",
         "summary": "Argo CD cannot render the latest encrypted ${environment} shop configuration."
       },
       "steps": {

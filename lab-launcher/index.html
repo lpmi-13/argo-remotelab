@@ -22,7 +22,7 @@
     .is-open .level-toggle::after{transform:rotate(225deg)}.level-name{font-size:16px}.level-title,.level-count{color:#526272;font-weight:400}.level-title{margin-left:8px}.level-count{margin-left:auto;white-space:nowrap}
     .curriculum-level h3{margin:0}.level-panel{display:grid;grid-template-rows:0fr;opacity:0;transition:grid-template-rows .36s cubic-bezier(.22,.61,.36,1),opacity .3s cubic-bezier(.22,.61,.36,1)}
     .is-open .level-panel{grid-template-rows:1fr;opacity:1}.level-panel-inner{min-height:0;overflow:hidden}.scenario-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:0;padding:0 14px 14px;list-style:none}
-    .scenario-list li{display:flex;overflow:hidden;background:#fff;border:1px solid #dce4eb;border-radius:4px}.scenario-choice{width:100%;padding:12px;background:transparent;border:0;color:inherit;text-align:left;font-weight:400}
+    .scenario-list li{display:flex;overflow:hidden;background:#fff;border:1px solid #dce4eb;border-radius:4px}.scenario-choice{display:flex;flex-direction:column;justify-content:flex-start;align-items:stretch;width:100%;padding:12px;background:transparent;border:0;color:inherit;text-align:left;font-weight:400}
     .scenario-choice:hover{background:#f0f5f8}.scenario-choice[aria-pressed="true"]{background:#eaf7fb;box-shadow:inset 0 0 0 2px #0a8fbb}.scenario-list strong{display:block}.scenario-list small{color:#526272}
     @media(max-width:500px){.level-title{display:block;margin-left:0}.level-toggle{align-items:center}}
     @media(prefers-reduced-motion:reduce){.level-panel,.level-toggle::after{transition:none}}
@@ -54,22 +54,6 @@
   const status=document.querySelector('#status');
   const button=document.querySelector('#start');
   const escape=value=>String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-  const shortTitles={
-    'console-orientation':'Find active shop release',
-    'console-unhealthy-version':'Find serving shop version',
-    'console-resources':'Check readiness probe',
-    'console-history':'Check deployed version',
-    'missing-configmap':"Shop pods won't start",
-    'stuck-sync':'Release still syncing',
-    'stale-job':'Shop rollout stalled',
-    'orphaned-resource':'Shop has no endpoints',
-    'sops-decrypt-failure':'Encrypted config fails',
-    'sops-global-mac-mismatch':'Integrity check failed',
-    'hmac-mismatch':'Encrypted value blocks',
-    'wrong-type-sops':'Secrets change blocks',
-    'env-drift':'Environment unhealthy',
-    'repo-auth':"Argo can't fetch source",
-  };
   function openLevel(level){
     document.querySelectorAll('.curriculum-level').forEach(section=>{
       const open=Number(section.dataset.level)===level;
@@ -94,7 +78,7 @@
   async function load(){
     const catalog=await get('/api/catalog');
     const levels=catalog.levels?.length ? catalog.levels : [...new Set(catalog.scenarios.map(item=>item.level))].map(level=>({level,title:''}));
-    document.querySelector('#scenario').innerHTML=levels.map(({level})=>`<optgroup label="Level ${level}">${catalog.scenarios.filter(item=>item.level===level).map(item=>`<option value="${escape(item.id)}">${escape(shortTitles[item.id]||item.title)}</option>`).join('')}</optgroup>`).join('');
+    document.querySelector('#scenario').innerHTML=levels.map(({level})=>`<optgroup label="Level ${level}">${catalog.scenarios.filter(item=>item.level===level).map(item=>`<option value="${escape(item.id)}">${escape(item.title)}</option>`).join('')}</optgroup>`).join('');
     document.querySelector('#catalog').innerHTML=levels.map(({level,title})=>{
       const items=catalog.scenarios.filter(item=>item.level===level);
       return `<section class="curriculum-level" data-level="${level}"><h3><button type="button" class="level-toggle" aria-expanded="false" aria-controls="level-panel-${level}"><span class="level-name">Level ${level} <span class="level-title">${escape(title||'')}</span></span><span class="level-count">${items.length} ${items.length===1?'mission':'missions'}</span></button></h3><div id="level-panel-${level}" class="level-panel" role="region" aria-label="Level ${level} missions" aria-hidden="true" inert><div class="level-panel-inner"><ul class="scenario-list">${items.map(item=>`<li><button type="button" class="scenario-choice" data-scenario="${escape(item.id)}" aria-pressed="false"><strong>${escape(item.title)}</strong><small>${escape(item.brief)}</small></button></li>`).join('')}</ul></div></div></section>`;
@@ -132,7 +116,6 @@
       sessionStorage.removeItem('argo-coach:handoff');
       sessionStorage.setItem('argo-coach:preparing',JSON.stringify({
         run_id:run.id,session_id:session.session_id,token,mode:payload.mode,
-        title:initialView.scenario?.title||payload.scenario,
       }));
       location.assign('/preparing.html');
     }catch(reason){status.textContent=reason.message;status.classList.add('error');button.disabled=false}

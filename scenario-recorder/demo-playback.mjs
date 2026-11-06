@@ -77,12 +77,34 @@ async function waitForDebrief(page, timeout) {
 
 async function verifyIncidentDemo(page, scenario, runID) {
   await page.locator('#argocd-coach-host [data-action="begin"]').click();
+  let gitCommit = '';
+  if (scenario === 'missing-configmap') {
+    await page.waitForURL(/\/gitea\/remotelab\/django-app\/src\/commit\/[0-9a-f]{40}\/chart\/django-app(?:-staging)?\/templates\/deployment\.yaml$/,
+      {timeout: 20 * 60_000});
+    await page.locator('main code').filter({hasText: 'django-app-missing-config'}).first().waitFor();
+    await page.waitForURL(/\/gitea\/remotelab\/django-app\/commit\/[0-9a-f]{40}$/,
+      {timeout: 20 * 60_000});
+    gitCommit = page.url().split('/').at(-1);
+    await page.locator('main code').filter({hasText: 'django-app-missing-config'}).first().waitFor();
+    console.log(`${scenario} showed the failing Git source and commit ${gitCommit.slice(0, 10)}`);
+  }
   await page.locator('#argocd-coach-host .demo-patch pre').waitFor({timeout: 20 * 60_000});
   await page.screenshot({path: path.join(outputDir, 'demo-incident-patch.png')});
   console.log(`${scenario} source patch visible`);
   await waitForDebrief(page, 20 * 60_000);
   const incident = await api('/api/runs/' + encodeURIComponent(runID));
   if (incident.state !== 'COMPLETED') throw new Error(`incident demo ended in ${incident.state}`);
+  if (gitCommit) {
+    const deployed = await page.evaluate(async () => {
+      const {session, token} = JSON.parse(sessionStorage.getItem('argo-coach:handoff'));
+      const response = await fetch(`/coach/learning/api/sessions/${session}`, {
+        headers: {Authorization: `Bearer ${token}`},
+      });
+      if (!response.ok) throw new Error(`session returned ${response.status}`);
+      return (await response.json()).revision;
+    });
+    if (deployed !== gitCommit) throw new Error(`Argo deployed ${deployed}, expected Git commit ${gitCommit}`);
+  }
   await page.screenshot({path: path.join(outputDir, 'demo-incident-debrief.png')});
   console.log(`${scenario} demonstration auto-completed after the source fix`);
 }

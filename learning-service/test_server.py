@@ -144,6 +144,11 @@ class LearningServiceTests(unittest.TestCase):
                          "An encrypted value blocked the shop release")
         self.assertIn("the selected environment", catalog["hmac-mismatch"]["brief"])
         self.assertNotIn("authentication", catalog["hmac-mismatch"]["brief"].lower())
+        for name, item in catalog.items():
+            with self.subTest(scenario=name):
+                view = server.build_session_view(session(name), {"state": "READY"}, probe(), False)
+                self.assertEqual(view["scenario"]["title"], item["title"])
+                self.assertEqual(view["briefing"]["headline"], item["title"])
 
     def test_unhealthy_release_requires_health_and_serving_revision(self):
         run = session(name="console-unhealthy-version", mode="demonstration")

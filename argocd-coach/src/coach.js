@@ -16,6 +16,7 @@
   const positionKey = `argo-coach:position:${config.session}`;
   const demoPatchKey = `argo-coach:demo-patch:${config.session}`;
   const demoFixKey = `argo-coach:demo-fix-started:${config.session}`;
+  const demoGitKey = `argo-coach:demo-git:${config.session}`;
   const demoNarrationKey = `argo-coach:demo-narration:${config.session}`;
   const demoAttemptsKey = `argo-coach:demo-attempts:${config.session}`;
   const demoPausedKey = `argo-coach:demo-paused:${config.session}`;
@@ -37,6 +38,7 @@
   let autoCollapsed = false;
   let hintVisible = false;
   let demoBusy = false;
+  let demoNavigating = false;
   let demoFixStarted = sessionStorage.getItem(demoFixKey) === 'true';
   let demoStopped = false;
   let demoPaused = sessionStorage.getItem(demoPausedKey) === 'true';
@@ -55,6 +57,7 @@
   let briefTicker = null;
   let pointerTimer = null;
   let demoPatch = JSON.parse(sessionStorage.getItem(demoPatchKey) || 'null');
+  let demoGit = JSON.parse(sessionStorage.getItem(demoGitKey) || 'null');
   let demoNarration = JSON.parse(sessionStorage.getItem(demoNarrationKey) || 'null');
   let demoAttempts = JSON.parse(sessionStorage.getItem(demoAttemptsKey) || 'null');
   let recentLearning = null;
@@ -95,7 +98,21 @@
     ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const ready = () => ['READY', 'INVESTIGATING', 'FIXED'].includes(view?.state);
+  const gitCommitURL = commit => /^[0-9a-f]{40}$/.test(commit || '')
+    ? `/gitea/remotelab/django-app/commit/${commit}` : null;
+  function gitSourceURL() {
+    if (view?.scenario.id !== 'missing-configmap' || !/^[0-9a-f]{40}$/.test(view.trigger_revision || '')) return null;
+    const path = view.fix_paths?.[0] || '';
+    if (!/^chart\/django-app(?:-staging)?\/templates\/deployment\.yaml$/.test(path)) return null;
+    return `/gitea/remotelab/django-app/src/commit/${view.trigger_revision}/${path}`;
+  }
+  function saveDemoGit(next) {
+    demoGit = next;
+    if (next) sessionStorage.setItem(demoGitKey, JSON.stringify(next));
+    else sessionStorage.removeItem(demoGitKey);
+  }
   function demoStepId() {
+    if (demoGit && view?.mode === 'demonstration' && !view.feedback) return `fix:${view.scenario.id}`;
     if (view?.next_check) return view.next_check.id;
     if (view && !view.fixed && view.scenario.level !== 1) return `fix:${view.scenario.id}`;
     return null;
@@ -133,7 +150,8 @@
     clearTimeout(reconnectTimer);
     if (stream) { stream.onclose = null; stream.close(); stream = null; }
     for (const key of ['argo-coach:handoff', 'argo-coach:argocd-landing', startedKey, initialViewKey,
-      seqKey, collapsedKey, positionKey, demoPatchKey, demoFixKey, demoNarrationKey, demoAttemptsKey, demoPausedKey]) sessionStorage.removeItem(key);
+      seqKey, collapsedKey, positionKey, demoPatchKey, demoFixKey, demoGitKey, demoNarrationKey,
+      demoAttemptsKey, demoPausedKey]) sessionStorage.removeItem(key);
   }
 
   function returnToMissions() {
@@ -160,7 +178,6 @@
       sessionStorage.setItem(`argo-coach:initial-view:${session.session_id}`, JSON.stringify(initialView));
       sessionStorage.setItem('argo-coach:preparing', JSON.stringify({
         run_id: run.id, session_id: session.session_id, token, mode: session.mode,
-        title: initialView.scenario?.title || view.scenario.title,
       }));
       location.assign('/preparing.html');
     } catch (reason) {
@@ -426,10 +443,13 @@
   }
 
   function scheduleDemo() {
-    if (demoAdvance || demoBusy || demoStopped || demoPaused || document.hidden || briefOpen || view?.mode !== 'demonstration' ||
+    if (demoAdvance || demoBusy || demoNavigating || demoStopped || demoPaused || document.hidden || briefOpen || view?.mode !== 'demonstration' ||
         view.feedback || !['READY', 'INVESTIGATING', 'FIXED'].includes(view.state)) return;
     const stepId = demoStepId();
-    if (stepId && demoNarration?.id === stepId && ['doing', 'locate'].includes(demoNarration.phase)) {
+    if (demoGit) {
+      if (['source', 'review'].includes(demoGit.phase)) void driveDemo();
+      else startDemoDelay(driveDemo);
+    } else if (stepId && demoNarration?.id === stepId && ['doing', 'locate'].includes(demoNarration.phase)) {
       void driveDemo();
     } else startDemoDelay(driveDemo);
   }
@@ -506,6 +526,19 @@
   function checkCard() {
     const check = view.next_check;
     if (view.mode === 'challenge') return '';
+    if (view.mode === 'demonstration' && demoGit) {
+      const commit = demoGit.commit || demoPatch?.commit || '';
+      const reviewing = ['review', 'return'].includes(demoGit.phase);
+      const what = reviewing ? `The coach is showing commit ${commit.slice(0, 10)} and its deployment chart change in Git.` :
+        demoGit.phase === 'committing' ? 'The repaired deployment chart is being committed and pushed.' :
+        demoGit.phase === 'commit' ? 'The coach will restore the broken ConfigMap reference, commit, and push the repair.' :
+        'Open the deployment template at the incident revision and find the missing ConfigMap reference.';
+      const why = reviewing ? 'This commit records the source repair. Next, confirm Argo deployed the same revision.' :
+        demoGit.phase === 'committing' ? 'The change is being committed and pushed to the lab Git repository.' :
+        'The pod warning points to this chart file. The source revision keeps the failing value visible while we inspect it.';
+      return `<section class="step-card demo-step"><p class="step-count">Repair in Git</p>
+        ${demoExplanation(what, why, demoGit.phase === 'committing' ? 'Doing' : reviewing ? 'Found' : 'Next')}</section>`;
+    }
     if (!check) {
       if (!view.fixed && view.scenario.level !== 1) {
         if (view.mode === 'demonstration') {
@@ -561,7 +594,8 @@
   function demoPatchCard() {
     if (view.mode !== 'demonstration' || !demoPatch?.diff) return '';
     return `<details class="demo-patch" ${demoPatchOpen ? 'open' : ''}><summary>Source change</summary>
-      <p class="small muted">Argo CD is applying this change.</p>
+      <p class="small muted">Argo CD is applying this change.${gitCommitURL(demoPatch.commit) ?
+        ` <a href="${gitCommitURL(demoPatch.commit)}">View commit ${escape(demoPatch.commit.slice(0, 10))} in Git</a>.` : ''}</p>
       <pre aria-label="Demonstration source diff">${escape(demoPatch.diff)}</pre></details>`;
   }
 
@@ -1414,13 +1448,103 @@
     await answerCheck(check.demonstration_answer);
   }
 
+  function gitPageTarget() {
+    const missingName = view.scenario.id === 'missing-configmap' &&
+      Array.from(document.querySelectorAll('main code')).find(element =>
+        element.textContent?.includes('django-app-missing-config') && visible(element));
+    if (missingName) return missingName;
+    const path = view.fix_paths?.[0];
+    return path && Array.from(document.querySelectorAll('main a')).find(element =>
+      element.textContent?.trim() === path && visible(element));
+  }
+
+  function navigateDemo(path) {
+    demoNavigating = true;
+    location.href = path;
+  }
+
+  async function performDemoFix(fixStep) {
+    const writesGit = ['git', 'argo-and-git', 'terminal'].includes(view.fix_surface);
+    const previousGit = demoGit;
+    if (writesGit) saveDemoGit({...demoGit, phase: 'committing'});
+    demoFixStarted = true;
+    sessionStorage.setItem(demoFixKey, 'true');
+    setDemoNarration(fixStep, 'doing');
+    let result;
+    try { result = await request(sessionPath + '/demonstrate-fix', {method: 'POST', body: '{}'}); }
+    catch (reason) {
+      demoFixStarted = false;
+      sessionStorage.removeItem(demoFixKey);
+      if (writesGit) saveDemoGit(previousGit?.source ? {...previousGit, phase: 'commit'} : null);
+      throw reason;
+    }
+    if (demoStopped) return;
+    demoPatch = {commit: result.commit || '', diff: result.diff || ''};
+    sessionStorage.setItem(demoPatchKey, JSON.stringify(demoPatch));
+    const commitURL = writesGit && gitCommitURL(demoPatch.commit);
+    if (commitURL) {
+      saveDemoGit({phase: 'review', commit: demoPatch.commit, source: previousGit?.source});
+      setDemoNarration(fixStep, 'locate');
+      navigateDemo(commitURL);
+      return;
+    }
+    saveDemoGit(null);
+    setDemoNarration(fixStep, 'learning');
+    await demoWait();
+    if (!demoStopped) await refresh();
+  }
+
   async function driveDemo() {
-    if (demoBusy || demoStopped || briefOpen || !view || !['READY', 'INVESTIGATING', 'FIXED'].includes(view.state) || view.feedback) return;
+    if (demoBusy || demoNavigating || demoStopped || briefOpen || !view || !['READY', 'INVESTIGATING', 'FIXED'].includes(view.state) || view.feedback) return;
     demoBusy = true;
     try {
       const expectedStep = demoStepId();
       await sending;
       if (demoStopped || view.feedback || !ready() || expectedStep !== demoStepId()) return;
+      const fixStep = `fix:${view.scenario.id}`;
+      if (demoGit?.phase === 'source') {
+        if (location.pathname !== demoGit.source) { navigateDemo(demoGit.source); return; }
+        const target = gitPageTarget();
+        if (target) await pointAt(target);
+        if (demoStopped) return;
+        saveDemoGit({...demoGit, phase: 'commit'});
+        setDemoNarration(fixStep, 'what');
+        return;
+      }
+      if (demoGit?.phase === 'commit') {
+        if (location.pathname !== demoGit.source) { navigateDemo(demoGit.source); return; }
+        if (demoFixStarted) { saveDemoGit({...demoGit, phase: 'committing'}); return; }
+        await performDemoFix(fixStep);
+        return;
+      }
+      if (demoGit?.phase === 'committing') {
+        // A page reload can interrupt the HTTP response after the push succeeds.
+        // The deployed revision still identifies that real commit once Argo is fixed.
+        const commit = demoPatch?.commit || (view.fixed ? view.revision : '');
+        const commitURL = gitCommitURL(commit);
+        if (commitURL) {
+          saveDemoGit({...demoGit, phase: 'review', commit});
+          setDemoNarration(fixStep, 'locate');
+          navigateDemo(commitURL);
+        } else await refresh();
+        return;
+      }
+      if (demoGit?.phase === 'review') {
+        const commitURL = gitCommitURL(demoGit.commit);
+        if (!commitURL) { saveDemoGit(null); await refresh(); return; }
+        if (location.pathname !== commitURL) { navigateDemo(commitURL); return; }
+        const target = gitPageTarget();
+        if (target) await pointAt(target);
+        if (demoStopped) return;
+        saveDemoGit({...demoGit, phase: 'return'});
+        setDemoNarration(fixStep, 'learning');
+        return;
+      }
+      if (demoGit?.phase === 'return') {
+        saveDemoGit(null);
+        navigateDemo(`/argocd/applications/argocd/${encodeURIComponent(view.application)}`);
+        return;
+      }
       const check = view.next_check;
       if (check) {
         if (demoNeedsLocation(check)) {
@@ -1434,23 +1558,12 @@
           await showDemoFinding(check);
         }
       } else if (!view.fixed && view.scenario.level !== 1 && !demoFixStarted) {
-        demoFixStarted = true;
-        sessionStorage.setItem(demoFixKey, 'true');
-        const fixStep = `fix:${view.scenario.id}`;
-        setDemoNarration(fixStep, 'doing');
-        let result;
-        try { result = await request(sessionPath + '/demonstrate-fix', {method: 'POST', body: '{}'}); }
-        catch (reason) {
-          demoFixStarted = false;
-          sessionStorage.removeItem(demoFixKey);
-          throw reason;
-        }
-        if (demoStopped) return;
-        demoPatch = {commit: result.commit || '', diff: result.diff || ''};
-        sessionStorage.setItem(demoPatchKey, JSON.stringify(demoPatch));
-        setDemoNarration(fixStep, 'learning');
-        await demoWait();
-        if (!demoStopped) await refresh();
+        const source = gitSourceURL();
+        if (source) {
+          saveDemoGit({phase: 'source', source});
+          setDemoNarration(fixStep, 'locate');
+          navigateDemo(source);
+        } else await performDemoFix(fixStep);
       } else if (view.fixed && view.checks_passed >= view.checks_total) {
         say('Writing the incident note.');
         await demoWait();
