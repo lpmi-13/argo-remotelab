@@ -1,13 +1,14 @@
 {
   "id": "console-unhealthy-version", "title": "Find the release still serving", "level": 1,
-  "brief": "Find the unhealthy shop Application and identify which revision is still serving during the failed rollout.",
+  "brief": "Find the unhealthy shop Application, compare the old and new Pods, and identify which revision is still serving during the failed rollout.",
   "fix_surface": "none", "fix_paths": [],
-  "targets": ["apps.list", "app.header", "app.history"],
+  "targets": ["apps.list", "app.header", "app.tree", "app.history"],
   "checks": [
     {"id": "application", "target": "apps.list", "question": "Which Application is unhealthy?", "answer": "${application}", "hint": "Find the shop Application for the selected environment.", "why": "The Applications list identifies which release needs inspection."},
-    {"id": "health", "target": "app.header", "question": "What health status does this Application show?", "answer": "${health}", "hint": "Read the health badge in the Application header.", "why": "Health shows whether the deployed workload is ready."},
-    {"id": "revision", "target": "app.history", "question": "Which Git revision is still serving the shop service?", "answer": "${serving_revision}", "hint": "Compare the newest History revision with the one before it. The new rollout is not ready.", "why": "The previous ready pod keeps serving while the new revision fails readiness."}
+    {"id": "health", "target": "app.header", "question": "What health status does this Application show?", "answer": "${health}", "hint": "Read the health badge in the Application header.", "why": "The health badge helps determine whether the rollout has become ready."},
+    {"id": "ready-pod", "target": "app.tree", "question": "How many Pods under Deployment/django are Healthy?", "answer": "1", "hint": "In Tree, compare the health indicators on the two Pods under Deployment/django.", "why": "Service/django sends traffic only to Ready Pods; compare Pod health before deciding which release serves."},
+    {"id": "revision", "target": "app.history", "question": "Which Git revision is still serving the shop service?", "answer": "${serving_revision}", "hint": "Compare the newest and previous distinct Revision entries with the Pod health you observed.", "why": "History records Git syncs; Pod readiness determines which release can receive traffic."}
   ],
-  "truth": {"resource": "${application}", "cause": "The new rollout is failing its readiness probe", "evidence": "${health} health; ${revision} unready; ${serving_revision} still serving", "fix": "No repair requested"},
+  "truth": {"resource": "${application}", "cause": "The new rollout is failing its readiness probe", "evidence": "${health} health; older Pod Healthy; new Pod unready; ${revision} synced; ${serving_revision} still serving", "fix": "No repair requested"},
   "habits": []
 }

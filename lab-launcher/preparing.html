@@ -12,11 +12,17 @@
     .ocean{position:fixed;inset:0;overflow:hidden;pointer-events:none;isolation:isolate}
     .ocean::before{content:"";position:absolute;inset:-15%;background:radial-gradient(circle at 20% 35%,#74d2d521,transparent 21%),radial-gradient(circle at 80% 70%,#ef7b4d1e,transparent 23%);animation:tide 16s ease-in-out infinite alternate}
     .ocean::after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(170deg,transparent 0 69px,#a7e8e708 70px,transparent 71px 140px);opacity:.55}
-    .swimmer{position:absolute;top:var(--top);left:0;width:var(--size);color:var(--color,#ef7b4d);opacity:var(--opacity,.65);animation:swim var(--duration) linear infinite;animation-delay:var(--delay)}
+    .seabed{position:absolute;right:0;bottom:0;left:0;height:min(42vh,350px);background:radial-gradient(ellipse 70% 35% at 50% 100%,#1b746c36,transparent 90%),linear-gradient(to top,#061e29d9,transparent 76%)}
+    .kelp{position:absolute;z-index:1;bottom:-12px;left:var(--left);width:var(--width);height:var(--height);color:var(--color,#327d70);opacity:var(--opacity,.55);transform-origin:50% 100%;animation:sway var(--duration,7s) ease-in-out infinite alternate;animation-delay:var(--delay,0s)}
+    .kelp.near{z-index:4}
+    .kelp svg{display:block;width:100%;height:100%;filter:drop-shadow(0 0 15px #61c7ab20)}
+    .revision{position:absolute;z-index:3;bottom:-110px;left:var(--left);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;width:var(--size,80px);aspect-ratio:1;border:1px solid #b6f4e979;border-radius:50%;background:radial-gradient(circle at 30% 24%,#eaffff70 0 3%,transparent 13%),radial-gradient(circle at 38% 28%,#8edddc42,transparent 58%),linear-gradient(145deg,#78d2cd36,#0d586d70 75%,#082d3e88);box-shadow:inset 0 0 0 2px #e1ffff0b,inset -8px -11px 18px #03273588,0 0 19px #7fddd032;color:#dcf9f2;font:600 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.025em;text-shadow:0 1px 5px #001c29;white-space:nowrap;opacity:0;animation:revision-rise var(--duration,22s) linear infinite;animation-delay:var(--delay,0s)}
+    .revision::before{content:"";position:absolute;top:14%;left:18%;width:37%;height:22%;border-top:2px solid #eaffff9c;border-left:1px solid #eaffff70;border-radius:70% 50% 0 0;transform:rotate(-30deg)}
+    .revision svg{width:15px;height:15px;fill:none;stroke:#ffb38d;stroke-width:1.6;stroke-linecap:round}
+    .swimmer{position:absolute;z-index:2;top:var(--top);left:0;width:var(--size);color:var(--color,#ef7b4d);opacity:var(--opacity,.65);animation:swim var(--duration) linear infinite;animation-delay:var(--delay)}
     .swimmer.reverse{animation-name:swim-back}
     .swimmer svg{display:block;width:100%;height:auto;filter:drop-shadow(0 7px 15px #0005);animation:float 2.8s ease-in-out infinite alternate}
     .swimmer:nth-child(3n) svg{animation-duration:3.6s}
-    .bubbles{position:absolute;inset:0;background:radial-gradient(circle at 12% 72%,#c8f5f58c 0 2px,transparent 3px),radial-gradient(circle at 18% 66%,#c8f5f551 0 3px,transparent 4px),radial-gradient(circle at 83% 23%,#c8f5f57a 0 2px,transparent 3px),radial-gradient(circle at 77% 29%,#c8f5f542 0 4px,transparent 5px),radial-gradient(circle at 57% 82%,#c8f5f54c 0 3px,transparent 4px);animation:bubbles 11s ease-in-out infinite alternate}
     main{position:relative;z-index:1;width:min(510px,calc(100% - 32px));padding:38px 42px 40px;border:1px solid #b7e5e02e;border-radius:22px;background:#071b27db;box-shadow:0 22px 90px #00121eb3,0 0 45px #66d4ce0d;backdrop-filter:blur(18px)}
     .brand{display:flex;align-items:center;gap:10px;color:#ffd4b8;font-size:13px;font-weight:750;letter-spacing:.12em;text-transform:uppercase}
     .brand svg{width:29px;height:29px;color:#ef7b4d}
@@ -36,10 +42,11 @@
     @keyframes swim-back{from{transform:translate3d(118vw,-2vh,0) rotate(5deg)}to{transform:translate3d(-18vw,3vh,0) rotate(-6deg)}}
     @keyframes float{from{transform:translateY(-6px) rotate(-5deg)}to{transform:translateY(6px) rotate(5deg)}}
     @keyframes tide{to{transform:translate3d(4%,3%,0) scale(1.08)}}
-    @keyframes bubbles{to{transform:translateY(-25px)}}
+    @keyframes sway{from{transform:rotate(-5deg)}to{transform:rotate(5deg)}}
+    @keyframes revision-rise{0%{transform:translate3d(0,0,0) scale(.82);opacity:0}10%,85%{opacity:var(--opacity,.7)}50%{transform:translate3d(10px,calc(-50vh - 110px),0) scale(1)}100%{transform:translate3d(var(--drift,30px),calc(-100vh - 220px),0) scale(1.08);opacity:0}}
     @keyframes load{from{transform:translateX(-100%)}to{transform:translateX(250%)}}
-    @media(max-width:520px){main{padding:30px 25px 32px}.swimmer{opacity:.35}}
-    @media(prefers-reduced-motion:reduce){.ocean::before,.bubbles,.swimmer,.swimmer svg,.track::before{animation:none}.swimmer{left:var(--still)}.track::before{width:65%}}
+    @media(max-width:520px){main{padding:30px 25px 32px}.swimmer{opacity:.35}.swimmer:nth-of-type(2n+1){display:none}.kelp svg{transform:scale(.72);transform-origin:50% 100%}.revision{width:var(--mobile-size,64px);font-size:9px}.revision svg{width:12px;height:12px}.revision.mobile-hide{display:none}}
+    @media(prefers-reduced-motion:reduce){.ocean::before,.kelp,.revision,.swimmer,.swimmer svg,.track::before{animation:none}.revision{top:var(--still-top);bottom:auto;opacity:var(--opacity,.7)}.swimmer{left:var(--still)}.track::before{width:65%}}
   </style>
 </head>
 <body>
@@ -56,9 +63,36 @@
       <circle cx="71" cy="56" r="3.2" fill="#183541"/>
       <path d="M52 69q8 7 16 0" fill="none" stroke="#8e3b35" stroke-width="2.5" stroke-linecap="round"/>
     </symbol>
+    <symbol id="kelp-frond" viewBox="0 0 120 340">
+      <path d="M59 343c19-47-24-69-5-125 20-57 27-74 6-118C46 69 47 41 64 8" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
+      <path fill="currentColor" d="M57 286C18 280 6 255 12 231c30 8 46 28 45 55Zm-5-42c31 0 55-23 57-47-30 4-52 20-57 47Zm-1-37c-29-9-42-31-38-56 26 10 42 29 38 56Zm12-42c32-7 49-31 47-55-27 9-46 28-47 55Zm-2-35c-28-14-36-37-28-60 23 14 36 34 28 60Zm-3-40c26-10 39-33 35-55-22 11-36 30-35 55Zm1-38C43 40 44 22 57 5c15 19 17 35 2 47Z"/>
+      <path d="M36 251c10 5 16 14 21 35m23-66c-13 3-21 10-28 24m-24-70c11 6 18 16 23 33m35-70c-12 5-19 14-23 28" fill="none" stroke="#a1e0c3" stroke-width="2" stroke-linecap="round" opacity=".2"/>
+    </symbol>
+    <symbol id="revision-mark" viewBox="0 0 20 20">
+      <path d="M1.5 10h4m9 0h4"/><circle cx="10" cy="10" r="4.5"/>
+    </symbol>
   </svg>
   <div class="ocean" aria-hidden="true">
-    <div class="bubbles"></div>
+    <div class="seabed"></div>
+    <span class="kelp" style="--left:-2%;--width:75px;--height:230px;--color:#3a9784;--opacity:.38;--duration:8s;--delay:-3s"><svg><use href="#kelp-frond"/></svg></span>
+    <span class="kelp near" style="--left:3%;--width:90px;--height:300px;--color:#1d685f;--opacity:.72;--duration:6.5s;--delay:-1s"><svg><use href="#kelp-frond"/></svg></span>
+    <span class="kelp" style="--left:11%;--width:67px;--height:215px;--color:#4caa92;--opacity:.43;--duration:7.5s;--delay:-5s"><svg><use href="#kelp-frond"/></svg></span>
+    <span class="kelp near" style="--left:19%;--width:82px;--height:265px;--color:#246d62;--opacity:.62;--duration:8.5s;--delay:-4s"><svg><use href="#kelp-frond"/></svg></span>
+    <span class="kelp" style="--left:34%;--width:55px;--height:180px;--color:#3d9382;--opacity:.27;--duration:7s;--delay:-2s"><svg><use href="#kelp-frond"/></svg></span>
+    <span class="kelp" style="--left:63%;--width:59px;--height:195px;--color:#4caa92;--opacity:.28;--duration:8s;--delay:-6s"><svg><use href="#kelp-frond"/></svg></span>
+    <span class="kelp near" style="--left:77%;--width:87px;--height:285px;--color:#226b61;--opacity:.68;--duration:7s;--delay:-5s"><svg><use href="#kelp-frond"/></svg></span>
+    <span class="kelp" style="--left:83%;--width:72px;--height:235px;--color:#4a9e89;--opacity:.42;--duration:9s;--delay:-1s"><svg><use href="#kelp-frond"/></svg></span>
+    <span class="kelp near" style="--left:91%;--width:92px;--height:315px;--color:#1d625a;--opacity:.74;--duration:6.7s;--delay:-4s"><svg><use href="#kelp-frond"/></svg></span>
+    <span class="kelp" style="--left:98%;--width:65px;--height:205px;--color:#449b87;--opacity:.42;--duration:8s;--delay:-3s"><svg><use href="#kelp-frond"/></svg></span>
+    <span class="revision" style="--still-top:11%;--left:7%;--size:84px;--duration:21s;--delay:-4s;--drift:35px;--opacity:.78"><svg><use href="#revision-mark"/></svg>f29b81c</span>
+    <span class="revision mobile-hide" style="--still-top:8%;--left:79%;--size:72px;--duration:24s;--delay:-15s;--drift:-30px;--opacity:.62"><svg><use href="#revision-mark"/></svg>c6a28e9</span>
+    <span class="revision" style="--still-top:32%;--left:4%;--size:68px;--duration:19s;--delay:-11s;--drift:30px;--opacity:.67"><svg><use href="#revision-mark"/></svg>8d31e4a</span>
+    <span class="revision mobile-hide" style="--still-top:28%;--left:75%;--size:90px;--duration:27s;--delay:-3s;--drift:-42px;--opacity:.7"><svg><use href="#revision-mark"/></svg>ae74c02</span>
+    <span class="revision mobile-hide" style="--still-top:57%;--left:15%;--size:78px;--duration:22s;--delay:-16s;--drift:31px;--opacity:.61"><svg><use href="#revision-mark"/></svg>32b7d90</span>
+    <span class="revision" style="--still-top:51%;--left:84%;--size:74px;--duration:20s;--delay:-9s;--drift:-35px;--opacity:.72"><svg><use href="#revision-mark"/></svg>4f99ac1</span>
+    <span class="revision" style="--still-top:76%;--left:9%;--size:92px;--duration:26s;--delay:-22s;--drift:40px;--opacity:.74"><svg><use href="#revision-mark"/></svg>d0a72e6</span>
+    <span class="revision mobile-hide" style="--still-top:67%;--left:68%;--size:70px;--duration:23s;--delay:-7s;--drift:-28px;--opacity:.58"><svg><use href="#revision-mark"/></svg>9c8ef13</span>
+    <span class="revision" style="--still-top:86%;--left:81%;--size:86px;--duration:25s;--delay:-19s;--drift:-39px;--opacity:.69"><svg><use href="#revision-mark"/></svg>5b12a7d</span>
     <span class="swimmer" style="--top:7%;--still:8%;--size:100px;--duration:25s;--delay:-3s;--opacity:.8"><svg><use href="#argo-octopus"/></svg></span>
     <span class="swimmer reverse" style="--top:18%;--still:73%;--size:66px;--duration:29s;--delay:-17s;--opacity:.6"><svg><use href="#argo-octopus"/></svg></span>
     <span class="swimmer" style="--top:36%;--still:17%;--size:75px;--duration:22s;--delay:-10s;--opacity:.56"><svg><use href="#argo-octopus"/></svg></span>

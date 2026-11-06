@@ -5,12 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "${SCRIPT_DIR}/lib/platform.sh"
 source "${SCRIPT_DIR}/lib/versions.sh"
+source "${SCRIPT_DIR}/lib/infrastructure-settings.sh"
+source "${SCRIPT_DIR}/lib/full-image-builds.sh"
 
-TRAEFIK_CRD_DEFINITIONS_URL="https://raw.githubusercontent.com/traefik/traefik/v3.7.13/docs/content/reference/dynamic-configuration/kubernetes-crd-definition-v1.yml"
-ARGOCD_ADMIN_PASSWORD="remotelab"
-# bcrypt hash for ARGOCD_ADMIN_PASSWORD. ArgoCD stores the admin password hash
-# in argocd-secret rather than the generated initial-admin secret.
-ARGOCD_ADMIN_PASSWORD_HASH='$2a$10$53xm8W5NWtQbIe2oMGQlheoTFSxh4El7pz1Mdf3NHiRGdund2oPya'
 IMAGE_TAG="${IMAGE_TAG:-${DEFAULT_FIRST_PARTY_IMAGE_TAG}}"
 SCENARIO_CONTROLLER_IMAGE="${SCENARIO_CONTROLLER_IMAGE_REPO}:${IMAGE_TAG}"
 LEARNING_SERVICE_IMAGE="${LEARNING_SERVICE_IMAGE_REPO}:${IMAGE_TAG}"
@@ -27,7 +24,7 @@ show_help() {
     echo ""
     echo "Options:"
     echo "  --warm            Require an existing lab and run the warm deployment"
-    echo "  --full            Rebuild the lab even when a warm deployment is available"
+    echo "  --full            Recreate lab resources even when a warm deployment is available"
     echo "  --skip-cleanup    Run the full setup without deleting existing resources"
     echo "  COLIMA_PROFILE    Environment variable for the macOS Colima profile (default: argo-remotelab)"
     echo "  --help, -h        Show this help message"
@@ -50,17 +47,6 @@ require_linux_sudo() {
         echo "  ERROR: Linux deployment needs sudo access for k3s service and image operations." >&2
         echo "         Run deploy-all.sh in an interactive terminal and enter your sudo password." >&2
         return 1
-    fi
-}
-
-import_docker_image_to_k3s() {
-    local image="$1"
-
-    require_linux_sudo
-    if [ "$(id -u)" -eq 0 ]; then
-        docker save "$image" | k3s ctr images import -
-    else
-        docker save "$image" | sudo -n k3s ctr images import -
     fi
 }
 
@@ -430,9 +416,17 @@ if [ "$SKIP_CLEANUP" = true ] && kubectl -n applications get pvc postgresql-pvc 
     fi
 fi
 
-# --- Cleanup ---
 if [ "$SKIP_CLEANUP" = false ]; then
     check_api_services_available
+fi
+# Build before deleting namespaces so a failed image build leaves the existing lab intact.
+echo "Preparing first-party images..."
+prepare_full_images
+echo "  OK: First-party images ready"
+echo ""
+
+# --- Cleanup ---
+if [ "$SKIP_CLEANUP" = false ]; then
     echo "Step 2: Cleaning up existing resources..."
     for ns in applications shop-staging argocd; do
         if kubectl get namespace "$ns" &>/dev/null; then
@@ -644,18 +638,8 @@ EOF
 echo "  OK: ArgoCD can access Gitea"
 echo ""
 
-# --- Build the sample application image ---
-echo "Step 12: Building the sample Django image..."
-if [[ "$OS" == "Darwin" ]]; then
-    colima --profile "$COLIMA_PROFILE" nerdctl -- build -t "$DJANGO_IMAGE" \
-        --namespace k8s.io "$REPO_DIR/sample-django-app"
-elif command -v nerdctl &>/dev/null; then
-    nerdctl build -t "$DJANGO_IMAGE" --namespace k8s.io "$REPO_DIR/sample-django-app"
-else
-    docker build -t "$DJANGO_IMAGE" "$REPO_DIR/sample-django-app"
-    import_docker_image_to_k3s "$DJANGO_IMAGE"
-fi
-echo "  OK: Sample Django image built"
+# --- Use the prepared sample application image ---
+echo "Step 12: Using the prepared sample Django image..."
 echo ""
 
 # --- Deploy ArgoCD Application ---
@@ -692,23 +676,8 @@ fi
 echo ""
 bash "$REPO_DIR/scripts/seed-history.sh" "$GITEA_LOCAL_URL"
 
-# --- Build Scenario Controller Image ---
-echo "Step 15: Building Scenario Controller image..."
-if [[ "$OS" == "Darwin" ]]; then
-    colima --profile "$COLIMA_PROFILE" nerdctl -- build -t "$SCENARIO_CONTROLLER_IMAGE" \
-        --namespace k8s.io "$REPO_DIR/scenario-controller" 2>&1 | tail -3
-else
-    # On Linux with k3s, use ctr to import
-    if command -v nerdctl &>/dev/null; then
-        nerdctl build -t "$SCENARIO_CONTROLLER_IMAGE" \
-            --namespace k8s.io "$REPO_DIR/scenario-controller"
-    else
-        # Fallback: build with docker and import
-        docker build -t "$SCENARIO_CONTROLLER_IMAGE" "$REPO_DIR/scenario-controller"
-        import_docker_image_to_k3s "$SCENARIO_CONTROLLER_IMAGE"
-    fi
-fi
-echo "  OK: Scenario controller image built"
+# --- Use the prepared Scenario Controller image ---
+echo "Step 15: Using the prepared Scenario Controller image..."
 echo ""
 
 # --- Deploy Scenario Controller ---
@@ -720,24 +689,7 @@ kubectl rollout status deployment/scenario-controller -n applications --timeout=
 echo "  OK: Scenario controller run API deployed; the launcher starts incidents"
 echo ""
 
-echo "Step 17: Building the learning UI services..."
-for component in learning-service lab-gateway lab-terminal; do
-    case "$component" in
-        learning-service) image="$LEARNING_SERVICE_IMAGE" ;;
-        lab-gateway) image="$LAB_GATEWAY_IMAGE" ;;
-        lab-terminal) image="$LAB_TERMINAL_IMAGE" ;;
-    esac
-    if [[ "$OS" == "Darwin" ]]; then
-        colima --profile "$COLIMA_PROFILE" nerdctl -- build -f "$REPO_DIR/$component/Dockerfile" -t "$image" \
-            --namespace k8s.io "$REPO_DIR"
-    elif command -v nerdctl &>/dev/null; then
-        nerdctl build -f "$REPO_DIR/$component/Dockerfile" -t "$image" \
-            --namespace k8s.io "$REPO_DIR"
-    else
-        docker build -f "$REPO_DIR/$component/Dockerfile" -t "$image" "$REPO_DIR"
-        import_docker_image_to_k3s "$image"
-    fi
-done
+echo "Step 17: Deploying the prepared learning UI services..."
 
 kubectl apply -f "$REPO_DIR/manifests/applications/learning-service.yaml"
 kubectl set image deployment/learning-service -n applications learning-service="$LEARNING_SERVICE_IMAGE" >/dev/null

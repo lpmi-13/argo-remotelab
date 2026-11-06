@@ -4,10 +4,12 @@ RUN apk add --no-cache git
 
 WORKDIR /app
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /scenario-controller ./cmd
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -o /scenario-controller ./cmd
 
 FROM quay.io/argoproj/argocd:v3.5.3 AS argocd-tools
 

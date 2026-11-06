@@ -21,8 +21,7 @@ SOURCES = {
         "manifests/applications/postgresql.yaml",
         "manifests/applications/gitea.yaml",
         "manifests/applications/gitea-init-user.yaml",
-        "scripts/lib/versions.sh",
-        "scripts/deploy-all.sh",
+        "scripts/lib/infrastructure-settings.sh",
     ),
     "sample-django-app": ("sample-django-app/Dockerfile", "sample-django-app/app"),
     "scenario-controller": ("scenario-controller",),
@@ -30,6 +29,7 @@ SOURCES = {
     "lab-gateway": (
         "lab-gateway/Dockerfile",
         "lab-gateway/nginx.conf",
+        "lab-gateway/10-kubernetes-resolver.sh",
         "argocd-coach/src",
         "argocd-coach/selectors",
         "lab-launcher",
@@ -52,6 +52,8 @@ def source_hash(repo_root: Path, component: str) -> str:
         if not path.is_file() or any(part in EXCLUDED_DIRS for part in path.parts):
             continue
         if component == "scenario-controller" and path == repo_root / "scenario-controller/main":
+            continue
+        if component == "scenario-controller" and path.name.endswith("_test.go"):
             continue
         if path.suffix == ".pyc":
             continue

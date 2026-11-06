@@ -154,13 +154,29 @@ class LearningServiceTests(unittest.TestCase):
         health = server.next_check(run, unhealthy)
         self.assertEqual(health["id"], "health")
         self.assertEqual(health["demonstration_answer"], "Progressing")
+        self.assertNotIn("Progressing", health["demo"]["why"])
+        self.assertIn("Progressing", health["learning"])
+        degraded = probe(False, False)
+        degraded["status"]["health"]["status"] = "Degraded"
+        self.assertNotIn("Degraded", server.next_check(run, degraded)["demo"]["why"])
+        self.assertIn("Degraded", server.next_check(run, degraded)["learning"])
         run["passed"].add("health")
+        ready_pod = server.next_check(run, unhealthy)
+        self.assertEqual(ready_pod["id"], "ready-pod")
+        self.assertEqual(ready_pod["target"], "app.tree")
+        self.assertEqual(ready_pod["demonstration_answer"], "1")
+        self.assertNotIn("Healthy", ready_pod["demo"]["look"])
+        self.assertIn("One Pod is Healthy", ready_pod["learning"])
+        run["passed"].add("ready-pod")
         revision = server.next_check(run, unhealthy)
         self.assertEqual(revision["id"], "revision")
         self.assertEqual(revision["demonstration_answer"], "baseline456")
-        self.assertIn("previous one", revision["demo"]["what"])
+        self.assertIn("previous distinct Revision", revision["demo"]["what"])
+        self.assertIn("Deployed At", revision["demo"]["look"])
+        self.assertNotIn("abc123", revision["demo"]["look"])
+        self.assertIn("abc123", revision["learning"])
         run["passed"].add("revision")
-        run["note"] = {"resource": run["application"], "evidence": "Progressing health; abc123 unready; baseline456 still serving",
+        run["note"] = {"resource": run["application"], "evidence": "Progressing health; older Pod Healthy; new Pod unready; abc123 synced; baseline456 still serving",
                        "revision": "baseline456", "cause": "The new rollout is failing its readiness probe",
                        "fix": "No repair requested"}
         feedback = server.score(run, unhealthy)
@@ -171,16 +187,19 @@ class LearningServiceTests(unittest.TestCase):
         self.assertEqual([step["action"] for step in feedback["debrief_steps"]], [
             "We found shop-web-prod in Applications.",
             "We read the Application header.",
+            "We compared the Pods in Tree.",
             "We compared revisions in History and Rollback.",
         ])
         self.assertEqual(feedback["debrief_steps"][1]["finding"], "Argo reports Progressing health.")
         self.assertEqual(feedback["debrief_steps"][2]["finding"],
-                         "The unhealthy abc123 rollout did not replace baseline456, which still serves traffic.")
+                         "The older Pod is Healthy; Service/django keeps using it while the new Pod is unready.")
+        self.assertEqual(feedback["debrief_steps"][3]["finding"],
+                         "Argo synced abc123, but that Pod is unready. The older baseline456 release still serves traffic.")
 
     def test_unhealthy_release_rejects_the_new_unready_revision(self):
         run = session(name="console-unhealthy-version", mode="guided")
         run["serving_revision"] = "baseline456"
-        run["passed"] = {"application", "health"}
+        run["passed"] = {"application", "health", "ready-pod"}
         run["visited"].add("app.history")
         unhealthy = probe(False, False)
         unhealthy["status"]["health"]["status"] = "Progressing"
@@ -191,11 +210,11 @@ class LearningServiceTests(unittest.TestCase):
                                            "details": {"check_id": "revision", "answer": "baseline456"}}, unhealthy)
         self.assertTrue(right["correct"])
         self.assertEqual(run["answers"]["revision"], "baseline456")
-        self.assertIn("baseline456 still serves traffic", right["message"])
+        self.assertIn("second distinct revision, baselin, is serving", right["message"])
 
     def test_unhealthy_session_receives_serving_revision_from_controller(self):
         run = session(name="console-unhealthy-version", mode="demonstration")
-        run["passed"] = {"application", "health"}
+        run["passed"] = {"application", "health", "ready-pod"}
         unhealthy = probe(False, False)
         unhealthy["status"]["health"]["status"] = "Progressing"
         view = server.session_view(run, run={"id": "run-test", "state": "READY",

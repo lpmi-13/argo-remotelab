@@ -24,7 +24,7 @@
       "briefing": {
         "source": "Release health alert",
         "headline": "Which shop release is still serving?",
-        "summary": "A new ${environment} shop rollout is unhealthy. Find the revision the service still serves."
+        "summary": "The ${environment} shop rollout is unhealthy. Use Pod health and History to identify its serving revision."
       },
       "steps": {
         "application": {
@@ -34,13 +34,18 @@
         },
         "health": {
           "action": "Read the health badge in the Application header.",
-          "reason": "The new rollout is not ready. With a rolling update, the previous ready pod can keep serving.",
-          "learning": "Argo reports ${health} health. Compare the newest History revision with the release before it."
+          "reason": "The health badge shows whether the rollout has become ready. Read it before interpreting Pod health or History.",
+          "learning": "Argo reports ${health} health. The rollout has not become ready; inspect both Pods in Tree."
+        },
+        "ready-pod": {
+          "action": "In Tree, compare the health indicators on the Pods under Deployment/django.",
+          "reason": "Pod health shows which replicas are Ready. Service/django sends traffic only to Ready Pods.",
+          "learning": "One Pod is Healthy and the new Pod is unready. The Service keeps routing to the older ready Pod."
         },
         "revision": {
-          "action": "Compare the newest History revision with the previous release's revision.",
-          "reason": "Argo synced the new commit, but its pod is unready. The previous ready pod still serves traffic.",
-          "learning": "Argo synced ${revision}, but that rollout is unready. ${serving_revision} still serves traffic."
+          "action": "Open History and Rollback. Compare the newest and previous distinct Revision entries.",
+          "reason": "History records Argo's Git syncs. Use the Pod readiness you observed to decide which revision serves traffic.",
+          "learning": "The top entry records Argo applying ${revision_short}, but its new Pod is unready. Service/django still routes to the older Healthy Pod, so the second distinct revision, ${serving_revision_short}, is serving."
         }
       }
     },
@@ -119,7 +124,7 @@
         },
         "probe-path": {
           "action": "Open Deployment/django from the tree, then read readinessProbe.httpGet.path in its Desired manifest.",
-          "reason": "A Progressing badge only reports the symptom. The Desired manifest reveals the probe path Argo will keep applying to every new pod.",
+          "reason": "A health badge reports the symptom. The Desired manifest reveals the probe path Argo will keep applying to every new pod.",
           "learning": "The configured path cannot answer the expected readiness request. A retry alone will reproduce the same unready pods."
         }
       },
@@ -141,13 +146,13 @@
           "learning": "This is the Application whose operation needs inspection."
         },
         "hook": {
-          "action": "Open Sync Status and read the failed hook entry and phase.",
-          "reason": "The operation panel orders the sync stages. It tells us whether the failure happened before the Deployment could update.",
+          "action": "Open Sync Status and read the hook entries and their phases.",
+          "reason": "The operation panel orders the sync stages. Read its phases to see where the rollout stopped.",
           "learning": "The failed phase runs before the main apply, so the rollout cannot advance until that hook succeeds."
         },
         "job-event": {
           "action": "Open the failed migration Job in the tree and read its Events tab.",
-          "reason": "The phase identifies where the sync stopped; the Job event confirms Kubernetes stopped retrying the failed hook.",
+          "reason": "The phase identifies where the sync stopped; Job Events show why Kubernetes ended that hook.",
           "learning": "BackoffLimitExceeded confirms the hook failed. Inspect its command in Git before repairing the release."
         }
       },
@@ -331,7 +336,8 @@
     "console-unhealthy-version": {
       "application": {"action": "We found ${application} in Applications.", "finding": "It is the unhealthy ${environment} release."},
       "health": {"action": "We read the Application header.", "finding": "Argo reports ${answer} health."},
-      "revision": {"action": "We compared revisions in History and Rollback.", "finding": "The unhealthy ${revision} rollout did not replace ${answer}, which still serves traffic."}
+      "ready-pod": {"action": "We compared the Pods in Tree.", "finding": "The older Pod is Healthy; Service/django keeps using it while the new Pod is unready."},
+      "revision": {"action": "We compared revisions in History and Rollback.", "finding": "Argo synced ${revision_short}, but that Pod is unready. The older ${answer} release still serves traffic."}
     },
     "console-resources": {
       "deployment": {"action": "We opened the Application tree.", "finding": "It contains Deployment/${answer}."},
@@ -401,8 +407,9 @@
     },
     "console-unhealthy-version": {
       "application": {"what": "Find and click ${application} in Applications.", "look": "Look for the ${application} card with the unhealthy status.", "why": "Its environment label identifies the release with a health problem."},
-      "health": {"what": "Open ${application}; read Health in the Application header.", "look": "Look for Health in the Application header.", "why": "The badge shows whether this release is ready to serve traffic."},
-      "revision": {"what": "Open ${application} → History and Rollback; compare the newest revision with the previous one.", "look": "Look for Revision in the History entry immediately before the newest one.", "why": "The new rollout is unready, so the previous revision's ready pod keeps serving."}
+      "health": {"what": "Open ${application}; read Health in the Application header.", "look": "Look for Health in the Application header.", "why": "The health badge shows whether the rollout is ready; compare Pods after reading it."},
+      "ready-pod": {"what": "Open Tree; compare the Pods under Deployment/django.", "look": "Look for health indicators on the Pods under Deployment/django.", "why": "Pod health shows which replicas can receive Service/django traffic."},
+      "revision": {"what": "Open History and Rollback; compare the newest and previous distinct Revision entries.", "look": "Look for Revision and Deployed At in the newest entry, then compare the next distinct entry.", "why": "Deployed At records Argo applying a revision; Pod readiness tells you whether it serves traffic."}
     },
     "console-resources": {
       "deployment": {"what": "Open ${application} → Tree; locate Deployment/django.", "look": "Look for Deployment/django in the Application tree.", "why": "The tree lists the workload owned by this Application."},
@@ -414,7 +421,7 @@
     },
     "missing-configmap": {
       "application": {"what": "Find and click the ${application} card in Applications.", "look": "Look for ${application} in Applications.", "why": "Its status identifies the release with pods failing to start."},
-      "missing-name": {"what": "Open ${application} → Tree → failing Pod → Events; read the ConfigMap name.", "look": "Look for the missing ConfigMap name in the failing Pod's Events.", "why": "The Pod warning names the missing dependency blocking startup."},
+      "missing-name": {"what": "Open ${application} → Tree → failing Pod → Events; read the warning.", "look": "Look for the named dependency in the failing Pod's Events.", "why": "Pod Events show why the new Pod cannot start."},
       "repair": {"what": "Restore the ConfigMap reference in the Deployment template, then push the Git change.", "why": "The Pod Event names the dependency the desired Deployment must reference."}
     },
     "stuck-sync": {
@@ -424,8 +431,8 @@
     },
     "stale-job": {
       "application": {"what": "Find and click ${application} in Applications.", "look": "Look for ${application} in Applications.", "why": "The card identifies the ${environment} release blocked before its Deployment updated."},
-      "hook": {"what": "Open ${application} → Sync Status; read the failed hook phase.", "look": "Look for the failed hook's phase in Sync Status.", "why": "The operation list shows which hook stopped the rollout."},
-      "job-event": {"what": "Open ${application} → Tree → migration Job → Events; read the failure reason.", "look": "Look for the BackoffLimitExceeded reason in the Job's Events.", "why": "The Job event confirms that Kubernetes stopped retrying the failed PreSync hook."},
+      "hook": {"what": "Open ${application} → Sync Status; read the hook phases.", "look": "Look for hook phases in Sync Status.", "why": "The operation list shows each hook's outcome and order."},
+      "job-event": {"what": "Open ${application} → Tree → migration Job → Events; read the failure reason.", "look": "Look for the failure reason in the migration Job's Events.", "why": "Job Events explain why Kubernetes stopped retrying this hook."},
       "repair": {"what": "Fix the migration hook in Git, push the commit, then resync ${application}.", "why": "The failed PreSync Job must succeed before the Deployment can update."}
     },
     "orphaned-resource": {
@@ -435,7 +442,7 @@
     },
     "sops-decrypt-failure": {
       "application": {"what": "In Applications, find and click ${application} with the comparison error.", "look": "Look for ${application}'s comparison error in Applications.", "why": "The card identifies the release Argo cannot render."},
-      "cause": {"what": "Open ${application} → Conditions; read the SOPS decryption error.", "look": "Look for the SOPS decryption detail in Conditions.", "why": "Conditions contains the manifest generation error before a resource tree exists."},
+      "cause": {"what": "Open ${application} → Conditions; read the manifest generation error.", "look": "Look for the failure detail in Conditions.", "why": "Conditions contains the source error before a resource tree exists."},
       "repair": {"what": "Re-encrypt the affected secret in the terminal, then commit and push it.", "why": "Conditions shows Argo cannot decrypt the current file."}
     },
     "sops-global-mac-mismatch": {
@@ -454,7 +461,7 @@
       "repair": {"what": "Re-encrypt a valid secrets map in the terminal, then push and resync.", "why": "The chart expects a map; the current encrypted value has the wrong shape."}
     },
     "env-drift": {
-      "application": {"what": "Compare the shop Applications, then click ${application}.", "look": "Look for the shop Application with a different health status.", "why": "Their status cards show the failure is limited to ${environment}."},
+      "application": {"what": "Compare the shop Applications, then click ${application}.", "look": "Look for the shop Application with a different health status.", "why": "Comparing status cards shows whether the failure is isolated to one environment."},
       "probe-path": {"what": "Open ${application} → Tree → Deployment/django → Manifest → Desired; read readinessProbe.httpGet.path.", "look": "Look for readinessProbe.httpGet.path in the Desired manifest.", "why": "Desired shows the environment-specific path Argo is applying to unready pods."},
       "repair": {"what": "Correct the ${environment} readiness path in its Git values file, then push.", "why": "The working environment provides the expected path without a shared chart change."}
     },

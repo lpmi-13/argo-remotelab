@@ -421,17 +421,104 @@ test('demo stops after one ineffective History click', {timeout: 15000}, async (
   } finally { await browser.close(); }
 });
 
-test('unhealthy release demo points to the previous serving revision', {timeout: 15000}, async () => {
+test('unhealthy release demo reads Health before naming its status', {timeout: 15000}, async () => {
   const fixturePage = await fixture('demonstration', true);
   const {browser, page} = fixturePage;
   fixturePage.setView({...session('demonstration'),
     scenario: {id: 'console-unhealthy-version', title: 'Find the release still serving', level: 1},
-    health: 'Progressing', fixed: false, checks_passed: 2, checks_total: 3,
+    health: 'Progressing', fixed: false, checks_passed: 1, checks_total: 4,
+    next_check: {id: 'health', target: 'app.header', where: 'Application details header',
+      demonstration_answer: 'Progressing', available: true,
+      learning: 'Argo reports Progressing health. The rollout has not become ready; inspect both Pods in Tree.',
+      demo: {what: 'Open shop-web-prod; read Health in the Application header.',
+        look: 'Look for Health in the Application header.',
+        why: 'The health badge shows whether the rollout is ready; compare Pods after reading it.'}},
+  });
+  await page.route('**/argocd/applications/argocd/shop-web-prod**', route =>
+    route.fulfill({contentType: 'text/html', body: `<!doctype html><html><body>
+      <span id="health">Progressing</span><script src="/coach/assets/coach.js"></script></body></html>`}));
+  try {
+    await page.goto('http://lab.test/argocd/applications/argocd/shop-web-prod?view=tree');
+    await page.clock.install();
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    const panel = page.locator('#argocd-coach-host .demo-step');
+    assert.doesNotMatch(await panel.innerText(), /Progressing/);
+    await page.locator('#argocd-coach-host [data-action="advance"]').click();
+    const phase = panel.locator('.demo-explanation span').first();
+    for (let attempt = 0; attempt < 12 && await phase.textContent() !== 'Look'; attempt += 1)
+      await page.clock.runFor(500);
+    assert.equal(await phase.textContent(), 'Look');
+    assert.doesNotMatch(await panel.innerText(), /Progressing/);
+    for (let attempt = 0; attempt < 16 && await phase.textContent() !== 'Found'; attempt += 1)
+      await page.clock.runFor(500);
+    assert.equal(await phase.textContent(), 'Found');
+    assert.equal(await panel.locator('.demo-explanation p').first().textContent(), 'Progressing');
+    assert.match(await panel.locator('.demo-explanation p').last().textContent(), /rollout has not become ready/);
+    const frame = await page.locator('#argocd-coach-host .spotlight').last().boundingBox();
+    const health = await page.locator('#health').boundingBox();
+    assert.ok(frame.y <= health.y && frame.y + frame.height >= health.y + health.height);
+  } finally { await browser.close(); }
+});
+
+test('unhealthy release demo compares the ready and unready Pods', {timeout: 15000}, async () => {
+  const fixturePage = await fixture('demonstration', true);
+  const {browser, page} = fixturePage;
+  fixturePage.setView({...session('demonstration'),
+    scenario: {id: 'console-unhealthy-version', title: 'Find the release still serving', level: 1},
+    health: 'Progressing', fixed: false, checks_passed: 2, checks_total: 4,
+    next_check: {id: 'ready-pod', target: 'app.tree', where: 'Application resource tree',
+      demonstration_answer: '1', available: true,
+      learning: 'One Pod is Healthy and the new Pod is unready. The Service keeps routing to the older ready Pod.',
+      demo: {what: 'Open Tree; compare the Pods under Deployment/django.',
+        look: 'Look for health indicators on the Pods under Deployment/django.',
+        why: 'Pod health shows which replicas can receive Service/django traffic.'}},
+  });
+  await page.route('**/argocd/api/v1/applications/shop-web-prod/resource-tree**', route =>
+    route.fulfill({json: {nodes: [
+      {kind: 'Pod', name: 'django-migrate-job-aaaaa', health: {status: 'Healthy'}},
+      {kind: 'Pod', name: 'django-7654321abc-ccccc', health: {status: 'Progressing'}},
+      {kind: 'Pod', name: 'django-123456789a-bbbbb', health: {status: 'Healthy'}},
+    ]}}));
+  await page.route('**/argocd/applications/argocd/shop-web-prod**', route =>
+    route.fulfill({contentType: 'text/html', body: `<!doctype html><html><body>
+      <span id="job-pod" class="application-resource-tree__node-title" style="position:absolute;left:500px;top:180px">django-migrate-job-aaaaa</span>
+      <span id="new-pod" class="application-resource-tree__node-title" style="position:absolute;left:500px;top:250px">django-7654321abc-ccccc</span>
+      <span id="old-pod" class="application-resource-tree__node-title" style="position:absolute;left:500px;top:320px">django-123456789a-bbbbb</span>
+      <script src="/coach/assets/coach.js"></script></body></html>`}));
+  try {
+    await page.goto('http://lab.test/argocd/applications/argocd/shop-web-prod?view=tree');
+    await page.clock.install();
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    assert.doesNotMatch(await page.locator('#argocd-coach-host .demo-step').innerText(), /One Pod is Healthy|new Pod is unready/);
+    await page.locator('#argocd-coach-host [data-action="advance"]').click();
+    const phase = page.locator('#argocd-coach-host .demo-explanation span').first();
+    for (let attempt = 0; attempt < 16 && await phase.textContent() !== 'Found'; attempt += 1)
+      await page.clock.runFor(500);
+    assert.equal(await phase.textContent(), 'Found');
+    assert.equal(await page.locator('#argocd-coach-host .demo-explanation p').first().textContent(),
+      'One Healthy Pod; the new Pod is unready.');
+    assert.match(await page.locator('#argocd-coach-host .demo-explanation p').last().textContent(), /Service keeps routing/);
+    const frame = await page.locator('#argocd-coach-host .spotlight').last().boundingBox();
+    for (const id of ['new-pod', 'old-pod']) {
+      const pod = await page.locator('#' + id).boundingBox();
+      assert.ok(frame.y <= pod.y && frame.y + frame.height >= pod.y + pod.height);
+    }
+  } finally { await browser.close(); }
+});
+
+test('unhealthy release demo distinguishes the newest sync from the serving revision', {timeout: 15000}, async () => {
+  const fixturePage = await fixture('demonstration', true);
+  const {browser, page} = fixturePage;
+  fixturePage.setView({...session('demonstration'),
+    scenario: {id: 'console-unhealthy-version', title: 'Find the release still serving', level: 1},
+    health: 'Progressing', revision: 'e4a0e601234567890abcdef1234567890abcdef1',
+    fixed: false, checks_passed: 3, checks_total: 4,
     next_check: {id: 'revision', target: 'app.history', where: 'History and Rollback',
       demonstration_answer: '0179d2d1234567890abcdef1234567890abcdef1', available: true,
-      demo: {what: 'Compare the newest revision with the previous one.',
-        look: 'Look for Revision in the History entry immediately before the newest one.',
-        why: 'The previous ready pod keeps serving.'}},
+      learning: 'The top entry records Argo applying e4a0e60, but its new Pod is unready. Service/django still routes to the older Healthy Pod, so the second distinct revision, 0179d2d, is serving.',
+      demo: {what: 'Open History and Rollback; compare the newest and previous distinct Revision entries.',
+        look: 'Look for Revision and Deployed At in the newest entry, then compare the next distinct entry.',
+        why: 'Deployed At records Argo applying a revision; Pod readiness tells you whether it serves traffic.'}},
   });
   await page.route('**/argocd/applications/argocd/shop-web-prod**', route =>
     route.fulfill({contentType: 'text/html', body: `<!doctype html><html><body>
@@ -443,13 +530,24 @@ test('unhealthy release demo points to the previous serving revision', {timeout:
     await page.goto('http://lab.test/argocd/applications/argocd/shop-web-prod?view=tree&rollback=0');
     await page.clock.install();
     await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    assert.doesNotMatch(await page.locator('#argocd-coach-host .demo-step').innerText(), /e4a0e60|0179d2d/);
     await page.locator('#argocd-coach-host [data-action="advance"]').click();
-    await page.clock.runFor(5500);
-    const highlight = page.locator('#argocd-coach-host .spotlight');
-    await highlight.waitFor();
-    const highlighted = await highlight.boundingBox();
+    await page.clock.runFor(2000);
+    const phase = page.locator('#argocd-coach-host .demo-explanation span').first();
+    assert.equal(await phase.textContent(), 'Look');
+    assert.match(await page.locator('#argocd-coach-host .demo-explanation p').first().textContent(), /Deployed At/);
+    assert.doesNotMatch(await page.locator('#argocd-coach-host .demo-step').innerText(), /e4a0e60|0179d2d/);
+    const topHighlight = await page.locator('#argocd-coach-host .spotlight').last().boundingBox();
     const serving = await page.locator('#serving-revision').boundingBox();
     const unready = await page.locator('#unready-revision').boundingBox();
+    assert.ok(Math.abs(topHighlight.y + topHighlight.height / 2 - (unready.y + unready.height / 2)) < 20);
+    for (let attempt = 0; attempt < 16 && await phase.textContent() !== 'Found'; attempt += 1)
+      await page.clock.runFor(500);
+    assert.equal(await phase.textContent(), 'Found');
+    assert.equal(await page.locator('#argocd-coach-host .demo-explanation p').first().textContent(),
+      'Serving revision: 0179d2d');
+    assert.match(await page.locator('#argocd-coach-host .demo-explanation p').last().textContent(), /top entry records Argo applying e4a0e60/);
+    const highlighted = await page.locator('#argocd-coach-host .spotlight').last().boundingBox();
     const highlightedCenter = highlighted.y + highlighted.height / 2;
     assert.ok(Math.abs(highlightedCenter - (serving.y + serving.height / 2)) < 20);
     assert.ok(Math.abs(highlightedCenter - (unready.y + unready.height / 2)) > 50);
@@ -516,7 +614,7 @@ test('already-open History goes straight to evidence without Doing', {timeout: 4
     }
     assert.deepEqual(await panel.locator('.demo-explanation span').allTextContents(), ['Found', 'Why']);
     assert.deepEqual(await panel.locator('.demo-explanation p').allTextContents(),
-      ['abc1234', 'History records the Git commit Argo actually deployed.']);
+      ['abc1234', 'This commit is deployed.']);
     assert.equal(await panel.getAttribute('data-doing'), null);
     assert.ok(Number(await page.locator('#argocd-coach-host [data-demo-seconds]').innerText()) >= 14.5);
   } finally { await browser.close(); }

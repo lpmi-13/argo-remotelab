@@ -13,6 +13,7 @@
   const initialViewKey = `argo-coach:initial-view:${config.session}`;
   const seqKey = `argo-coach:sequence:${config.session}`;
   const collapsedKey = `argo-coach:collapsed:${config.session}`;
+  const positionKey = `argo-coach:position:${config.session}`;
   const demoPatchKey = `argo-coach:demo-patch:${config.session}`;
   const demoFixKey = `argo-coach:demo-fix-started:${config.session}`;
   const demoNarrationKey = `argo-coach:demo-narration:${config.session}`;
@@ -29,6 +30,9 @@
   let briefOpen = !sessionStorage.getItem(startedKey);
   let noteOpen = false;
   let collapsed = sessionStorage.getItem(collapsedKey) === 'true';
+  const savedPosition = JSON.parse(sessionStorage.getItem(positionKey) || 'null');
+  let panelPosition = savedPosition && Number.isFinite(savedPosition.x) && Number.isFinite(savedPosition.y)
+    ? savedPosition : null;
   let nativeOverlayOpen = false;
   let autoCollapsed = false;
   let hintVisible = false;
@@ -129,7 +133,7 @@
     clearTimeout(reconnectTimer);
     if (stream) { stream.onclose = null; stream.close(); stream = null; }
     for (const key of ['argo-coach:handoff', 'argo-coach:argocd-landing', startedKey, initialViewKey,
-      seqKey, collapsedKey, demoPatchKey, demoFixKey, demoNarrationKey, demoAttemptsKey, demoPausedKey]) sessionStorage.removeItem(key);
+      seqKey, collapsedKey, positionKey, demoPatchKey, demoFixKey, demoNarrationKey, demoAttemptsKey, demoPausedKey]) sessionStorage.removeItem(key);
   }
 
   function returnToMissions() {
@@ -524,11 +528,16 @@
       const narration = demoNarration?.id === check.id ? demoNarration : null;
       const found = narration?.phase === 'learning';
       const orientationRevision = view.scenario.id === 'console-orientation' && check.id === 'revision';
+      const unhealthyPod = view.scenario.id === 'console-unhealthy-version' && check.id === 'ready-pod';
+      const unhealthyRevision = view.scenario.id === 'console-unhealthy-version' && check.id === 'revision';
       const locating = Boolean(check.demo?.look) && narration?.phase === 'locate';
-      const what = found ? (orientationRevision ? `Revision: ${check.demonstration_answer}` : check.demonstration_answer)
+      const what = found ? (orientationRevision ? `Revision: ${check.demonstration_answer}`
+        : unhealthyPod ? 'One Healthy Pod; the new Pod is unready.'
+        : unhealthyRevision ? `Serving revision: ${String(check.demonstration_answer).slice(0, 7)}`
+        : check.demonstration_answer)
         : locating ? check.demo.look : narration?.phase === 'doing'
         ? narration.detail || check.demo?.what || check.action : check.demo?.what || check.action;
-      const why = narration?.phase === 'doing' && narration.detailReason
+      const why = found && check.learning ? check.learning : narration?.phase === 'doing' && narration.detailReason
         ? narration.detailReason : check.demo?.why || check.reason;
       return `<section class="step-card demo-step"><p class="step-count">Step ${view.checks_passed + 1} of ${view.checks_total}</p>
         ${demoExplanation(what, why, found ? 'Found' : locating ? 'Look' : narration?.phase === 'doing' ? 'Doing' : 'Next')}</section>`;
@@ -641,6 +650,20 @@
     </div></div>`;
   }
 
+  function positionCoach(panel, x, y, save = false) {
+    const bounds = panel.getBoundingClientRect();
+    const margin = 8;
+    panelPosition = {
+      x: Math.max(margin, Math.min(Math.round(x), Math.max(margin, innerWidth - bounds.width - margin))),
+      y: Math.max(margin, Math.min(Math.round(y), Math.max(margin, innerHeight - bounds.height - margin))),
+    };
+    panel.style.left = `${panelPosition.x}px`;
+    panel.style.top = `${panelPosition.y}px`;
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
+    if (save) sessionStorage.setItem(positionKey, JSON.stringify(panelPosition));
+  }
+
   function render() {
     if (!view) {
       root.innerHTML = error && message ? `<div class="modal-wrap"><div class="modal" role="alert">
@@ -712,11 +735,13 @@
     const doing = view.mode === 'demonstration' && demoNarration?.id === stepId && demoNarration?.phase === 'doing';
     root.innerHTML = `<aside class="panel" ${collapsed ? 'data-collapsed' : ''} ${doing ? 'data-doing' : ''} aria-label="Argo CD Coach">
       <div class="header panel-controls">
+      <button id="coach-move" class="coach-drag-handle" type="button" aria-label="Move coach. Drag or use arrow keys." title="Drag to move coach; use arrow keys when focused">⠿ Move</button>
       ${view.mode === 'demonstration' && !['ABORTED', 'COMPLETED', 'FAILED'].includes(view.state) ? '<button class="secondary stop-button" data-action="stop" aria-label="Stop demonstration">Stop</button>' : ''}
       ${view.mode === 'demonstration' && !['ABORTED', 'COMPLETED', 'FAILED'].includes(view.state) ? `<button class="secondary stop-button" data-action="pause-demo" aria-label="${demoPaused ? 'Resume' : 'Pause'} demonstration">${demoPaused ? 'Resume' : 'Pause'}</button>` : ''}
       <button class="icon-button" data-action="collapse" aria-label="${collapsed ? 'Expand' : 'Collapse'} coach">${collapsed ? '▣' : '−'}</button></div>
       ${collapsed ? '' : `<div class="body">${body}${message ? `<div class="message ${error ? 'error' : ''}" role="status">${escape(message)}</div>` : ''}${view.mode === 'demonstration' ? demoTimerMarkup() : ''}</div>`}
     </aside>${noteOpen ? noteForm() : ''}`;
+    if (panelPosition) positionCoach(root.querySelector('.panel'), panelPosition.x, panelPosition.y);
     for (const [id, value] of previousValues) {
       const element = root.querySelector(`#${id}`);
       if (element) element.value = value;
@@ -864,9 +889,17 @@
   async function indicateEvidence(check, demonstration) {
     if (demonstration) markDemoTarget(check);
     else {
-      const element = evidenceElement(check);
-      if (element) { await scrollToTarget(element); spotlight(element); }
+      let element = evidenceElement(check), related = null;
+      if (view?.scenario.id === 'console-unhealthy-version' && check.id === 'ready-pod') {
+        try {
+          const pods = await rolloutPodElements();
+          element = pods.healthy || element;
+          related = pods.unready;
+        } catch (_) { /* The Tree is still a useful fallback. */ }
+      }
+      if (element) await scrollToTarget(element);
       say(check.hint || `Read ${check.where}.`);
+      if (element?.isConnected && visible(element)) spotlight(element, related);
     }
     return true;
   }
@@ -983,6 +1016,16 @@
     return true;
   }
 
+  function historyRevisionElement(revision) {
+    const history = document.querySelector('.application-deployment-history');
+    const answer = String(revision || '').toLowerCase();
+    return history && answer && Array.from(history.querySelectorAll('*')).find(element => {
+      if (element.childElementCount || !visible(element)) return false;
+      const text = element.textContent?.trim().toLowerCase() || '';
+      return text.includes(answer) || (text.length >= 7 && answer.startsWith(text));
+    });
+  }
+
   function evidenceElement(check) {
     const exact = text => Array.from(document.querySelectorAll('body *')).find(element =>
       element.childElementCount === 0 && element.textContent?.trim() === text && visible(element));
@@ -996,11 +1039,7 @@
     };
     const history = check.target === 'app.history' && document.querySelector('.application-deployment-history');
     const answer = String(check.demonstration_answer || '').toLowerCase();
-    const historyRevision = history && answer && Array.from(history.querySelectorAll('*')).find(element => {
-      if (element.childElementCount || !visible(element)) return false;
-      const text = element.textContent?.trim().toLowerCase() || '';
-      return text.includes(answer) || (text.length >= 7 && answer.startsWith(text));
-    });
+    const historyRevision = history && historyRevisionElement(answer);
     const evidenceScope = {
       'app.operation': '.application-operation-state__message, .application-operation-state__icons_container_padding',
       'app.conditions': '.application-conditions',
@@ -1016,7 +1055,7 @@
       .sort((a, b) => a.textContent.length - b.textContent.length)[0];
     return (check.target === 'apps.list' ? exact(view.application) : null) ||
       (check.target === 'app.header' ? exact(view.health || '') : null) ||
-      (check.target === 'app.tree' ? exact(check.demonstration_answer || '') : null) ||
+      (check.target === 'app.tree' && check.id !== 'ready-pod' ? exact(check.demonstration_answer || '') : null) ||
       historyRevision || answerMatch || history || (drawer !== document && visible(drawer) ? drawer : null) ||
       (check.target === 'settings.repos' ? candidate('gitea.applications.svc.cluster.local') : null) ||
       Array.from(document.querySelectorAll(selectors[check.target] || '.__argo_coach_no_match__')).find(visible) ||
@@ -1041,16 +1080,33 @@
     return true;
   }
 
-  async function resourceNode(target) {
+  async function resourceTreeNodes() {
     const token = localStorage.getItem('argocd.token');
     const response = await fetch(`/argocd/api/v1/applications/${encodeURIComponent(view.application)}/resource-tree?appNamespace=argocd`,
       {headers: token ? {Authorization: `Bearer ${token}`} : {}});
     if (!response.ok) throw new Error(`Argo CD resource tree returned ${response.status}`);
-    const tree = await response.json();
+    return (await response.json()).nodes || [];
+  }
+
+  async function rolloutPodElements() {
+    // The tree can also contain Pods owned by migration and verification Jobs.
+    const pods = (await resourceTreeNodes()).filter(node =>
+      node.kind === 'Pod' && /^django-[a-z0-9]+-[a-z0-9]+$/.test(node.name));
+    const titles = Array.from(document.querySelectorAll('.application-resource-tree__node-title'));
+    const title = node => node && titles.find(element =>
+      element.textContent?.trim() === node.name && visible(element));
+    return {
+      healthy: title(pods.find(node => node.health?.status === 'Healthy')),
+      unready: title(pods.find(node => node.health?.status && node.health.status !== 'Healthy')),
+    };
+  }
+
+  async function resourceNode(target) {
+    const nodes = await resourceTreeNodes();
     const kind = target === 'resource.events' && view.scenario.id === 'stale-job' ? 'Job' :
       target === 'resource.events' || target === 'resource.logs' ? 'Pod' : 'Deployment';
-    const nodes = (tree.nodes || []).filter(node => node.kind === kind);
-    const node = nodes.find(item => item.health?.status && item.health.status !== 'Healthy') || nodes[0];
+    const matching = nodes.filter(node => node.kind === kind);
+    const node = matching.find(item => item.health?.status && item.health.status !== 'Healthy') || matching[0];
     return node ? {id: [node.group || '', node.kind, node.namespace || '', node.name].join('/') + '/0',
       name: node.name, kind: node.kind} : null;
   }
@@ -1325,6 +1381,7 @@
     clearDemoLocationAttempts();
     const needsLook = Boolean(check.demo?.look);
     const phase = demoNarration?.id === check.id ? demoNarration.phase : null;
+    const unhealthyHistory = view.scenario.id === 'console-unhealthy-version' && check.id === 'revision';
     if (needsLook && phase === 'learning') {
       await answerCheck(check.demonstration_answer);
       return;
@@ -1332,11 +1389,22 @@
     if (needsLook && phase !== 'locate') {
       pointer.removeAttribute('data-visible');
       setDemoNarration(check.id, 'locate');
+      if (unhealthyHistory) {
+        const newest = historyRevisionElement(view.revision);
+        if (newest) await pointAt(newest, false, historyRevisionLabel(newest));
+      }
       await demoWait(evidenceLocateDelay);
     }
     if (demoStopped || view.next_check?.id !== check.id) return;
-    const element = evidenceElement(check);
-    const label = check.target === 'app.history' ? historyRevisionLabel(element) : null;
+    let element = evidenceElement(check), label = null;
+    if (view.scenario.id === 'console-unhealthy-version' && check.id === 'ready-pod') {
+      try {
+        const pods = await rolloutPodElements();
+        element = pods.healthy || element;
+        label = pods.unready;
+      } catch (_) { /* Keep the Tree pointer when Pod details are unavailable. */ }
+    } else if (check.target === 'app.history') label = historyRevisionLabel(element);
+    if (unhealthyHistory) root.querySelectorAll('.spotlight').forEach(frame => frame.remove());
     if (element) await pointAt(element, false, label);
     if (demoStopped || view.next_check?.id !== check.id) return;
     setDemoNarration(check.id, 'learning');
@@ -1472,6 +1540,36 @@
       }
     }
   });
+  root.addEventListener('pointerdown', event => {
+    const handle = event.target.closest('.coach-drag-handle');
+    if (!handle || event.button !== 0 || !event.isPrimary) return;
+    const panel = handle.closest('.panel');
+    const start = panel.getBoundingClientRect();
+    const pointerId = event.pointerId;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    event.preventDefault();
+    handle.setPointerCapture(pointerId);
+    handle.setAttribute('data-dragging', '');
+    const move = update => {
+      if (update.pointerId !== pointerId) return;
+      const currentPanel = root.querySelector('.panel');
+      if (currentPanel) positionCoach(currentPanel, start.left + update.clientX - startX,
+        start.top + update.clientY - startY, true);
+    };
+    const finish = () => {
+      handle.removeAttribute('data-dragging');
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', finish);
+      handle.removeEventListener('pointercancel', finish);
+      handle.removeEventListener('lostpointercapture', finish);
+      if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', finish);
+    handle.addEventListener('pointercancel', finish);
+    handle.addEventListener('lostpointercapture', finish);
+  });
   dockRoot.addEventListener('click', event => {
     if (event.target.closest('[data-action="close-terminal"]')) {
       terminalOpen = false;
@@ -1517,7 +1615,22 @@
     else if (event.target.id === 'note-form') submitNote(Object.fromEntries(new FormData(event.target)));
   });
   root.addEventListener('keydown', event => {
+    if (event.target.matches('.coach-drag-handle')) {
+      const step = {ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1]}[event.key];
+      if (step) {
+        event.preventDefault();
+        const panel = root.querySelector('.panel');
+        const bounds = panel.getBoundingClientRect();
+        const distance = event.shiftKey ? 50 : 20;
+        positionCoach(panel, bounds.left + step[0] * distance, bounds.top + step[1] * distance, true);
+        return;
+      }
+    }
     if (event.key === 'Escape' && noteOpen) { noteOpen = false; render(); }
+  });
+  addEventListener('resize', () => {
+    const panel = root.querySelector('.panel');
+    if (panel && panelPosition) positionCoach(panel, panelPosition.x, panelPosition.y, true);
   });
   addEventListener('pointerdown', () => stepClock.input(), {passive: true});
   addEventListener('keydown', () => stepClock.input(), {passive: true});

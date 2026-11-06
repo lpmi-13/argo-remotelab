@@ -299,7 +299,7 @@ func (s *Server) prepareCreate(replace bool) error {
 func manifestFor(run *Run) map[string]any {
 	brief := map[string]string{
 		"console-orientation":       "Find the application for this environment and identify its deployed revision in Argo CD.",
-		"console-unhealthy-version": "Find the unhealthy shop Application, read its health, and identify the revision still serving in History.",
+		"console-unhealthy-version": "Find the unhealthy shop Application, compare its Pods in Tree, and identify the serving revision in History.",
 		"console-resources":         "Find the shop Deployment in the tree and read its readiness probe in the Desired manifest.",
 		"console-history":           "Read the latest deployed revision in History and the result of the last sync operation.",
 		"missing-configmap":         "A release is not starting. Find the affected workload and the most recent warning in Argo CD.",

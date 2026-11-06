@@ -1,8 +1,7 @@
 FROM public.ecr.aws/docker/library/python:3.14.10-slim-trixie
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
@@ -11,12 +10,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY app/requirements.txt /tmp/requirements.txt
-RUN pip install -r /tmp/requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r /tmp/requirements.txt
 
-COPY app/ /app/
-
-RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin django \
-    && chown -R django:django /app
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin django
+COPY --chown=django:django app/ /app/
 
 USER django
 

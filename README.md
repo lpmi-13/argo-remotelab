@@ -53,10 +53,11 @@ and its infrastructure dependency pins match this checkout, it selects a warm
 deployment. If lab resources are missing or infrastructure pins changed, it
 runs the full setup and recreates the lab namespaces. An existing deployment
 that is temporarily unready stops the run before cleanup. Use `--full` to
-request a complete rebuild explicitly. PostgreSQL 16 volumes need a data
-migration before PostgreSQL 18 can reuse them; `--skip-cleanup` stops if it
-finds an older PostgreSQL deployment, and the database pod checks the volume
-version before startup. Use `--full` for a disposable lab.
+recreate lab resources explicitly; unchanged local images are reused.
+PostgreSQL 16 volumes need a data migration before PostgreSQL 18 can reuse
+them; `--skip-cleanup` stops if it finds an older PostgreSQL deployment,
+and the database pod checks the volume version before startup. Use `--full`
+for a disposable lab.
 
 On macOS, deployment checks registry access from inside the Colima VM and
 retries brief failures. If only the lab profile has a persistent failure, it
@@ -70,6 +71,8 @@ reports the host failure without disrupting Colima. Other running profiles
 are left alone.
 
 Warm deployment resets the current mission while keeping the Colima profile, Argo CD, PostgreSQL, Gitea, persistent volumes, and SOPS key. It restores the Git baseline, waits for the Applications to become Healthy and Synced, and rebuilds first-party images whose source or image tag changed, including the sample Django app. If the local app, chart, or platform source changed, it seeds a new baseline and release history.
+
+Full deployment prepares first-party images before deleting lab namespaces. It reuses images whose recorded source hash and tag match and that are still present locally, then builds remaining images two at a time. A build failure stops before cleanup. On Linux, `nerdctl` builds directly into k3s's containerd when installed; the Docker fallback imports images only when a rebuild is needed. Warm readiness hashes the pinned infrastructure manifests and `scripts/lib/infrastructure-settings.sh`, so edits to image build orchestration and first-party image tags do not force a full deployment. Use `--full` when changing full-only cluster setup logic outside those inputs.
 
 The deployment script starts local port-forwards for the lab gateway at `https://localhost:8443/` and Gitea at `http://localhost:3000/`. Open the lab at `https://localhost:8443/` and Gitea's browser UI at `https://localhost:8443/gitea/`, accepting the local certificate. The direct Gitea port-forward at `http://localhost:3000/` is for deployment scripts and API access; because Gitea is configured under the `/gitea/` path, opening its UI directly there will leave its static assets unstyled. The port-forwards keep running after deployment and are stopped by `cleanup-all.sh`.
 

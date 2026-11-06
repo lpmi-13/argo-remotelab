@@ -145,11 +145,15 @@ def answer_matches(actual, expected):
 
 def context_for(session, probe):
     status = probe.get("status") or {}
+    revision = (status.get("sync") or {}).get("revision") or probe.get("git_revision") or ""
+    serving_revision = session.get("serving_revision", "")
     return {
         "application": session["application"],
         "environment": session["environment"],
-        "revision": (status.get("sync") or {}).get("revision") or probe.get("git_revision") or "",
-        "serving_revision": session.get("serving_revision", ""),
+        "revision": revision,
+        "revision_short": revision[:7],
+        "serving_revision": serving_revision,
+        "serving_revision_short": serving_revision[:7],
         "health": (status.get("health") or {}).get("status") or "Unknown",
     }
 
