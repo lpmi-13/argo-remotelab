@@ -24,6 +24,8 @@
   let message = '';
   let error = false;
   let redirecting = false;
+  let replaying = false;
+  let replayError = '';
   let briefOpen = !sessionStorage.getItem(startedKey);
   let noteOpen = false;
   let collapsed = sessionStorage.getItem(collapsedKey) === 'true';
@@ -118,8 +120,7 @@
     stepClock.start(stepId, stepId.startsWith('fix:') ? 90 : 45);
   }
 
-  function returnToMissions() {
-    if (redirecting) return;
+  function leaveCurrentSession() {
     redirecting = true;
     demoStopped = true;
     cancelDemoDelay();
@@ -129,7 +130,41 @@
     if (stream) { stream.onclose = null; stream.close(); stream = null; }
     for (const key of ['argo-coach:handoff', 'argo-coach:argocd-landing', startedKey, initialViewKey,
       seqKey, collapsedKey, demoPatchKey, demoFixKey, demoNarrationKey, demoAttemptsKey, demoPausedKey]) sessionStorage.removeItem(key);
+  }
+
+  function returnToMissions() {
+    if (redirecting) return;
+    leaveCurrentSession();
     location.replace('/');
+  }
+
+  async function replayMission() {
+    if (replaying || !view?.feedback) return;
+    replaying = true;
+    replayError = '';
+    render();
+    try {
+      const result = await request('/api/runs', {method: 'POST', body: JSON.stringify({
+        scenario: view.scenario.id, mode: view.mode, environment: view.environment, replace_existing: true,
+      })});
+      const {run, session} = result;
+      if (!run?.id || !session?.session_id || !session?.connection_token) {
+        throw new Error('The new mission could not be prepared.');
+      }
+      const {connection_token: token, ...initialView} = session;
+      leaveCurrentSession();
+      sessionStorage.setItem(`argo-coach:initial-view:${session.session_id}`, JSON.stringify(initialView));
+      sessionStorage.setItem('argo-coach:preparing', JSON.stringify({
+        run_id: run.id, session_id: session.session_id, token, mode: session.mode,
+        title: initialView.scenario?.title || view.scenario.title,
+      }));
+      location.assign('/preparing.html');
+    } catch (reason) {
+      replaying = false;
+      replayError = reason.message;
+      render();
+      root.querySelector('[data-action="replay"]')?.focus();
+    }
   }
 
   async function request(path, options = {}) {
@@ -550,10 +585,8 @@
       .filter(([, value]) => value);
     const hints = Number(feedback.assistance?.hints || 0);
     const demonstrations = Number(feedback.assistance?.show_me || 0);
-    const replay = new URLSearchParams({scenario: view.scenario.id, mode: view.mode, environment: view.environment});
-    const sameSeed = new URLSearchParams(replay);
-    if (view.seed != null) sameSeed.set('seed', String(view.seed));
-    const lessHelp = new URLSearchParams(replay);
+    const lessHelp = new URLSearchParams({scenario: view.scenario.id, mode: view.mode,
+      environment: view.environment});
     lessHelp.set('mode', view.mode === 'demonstration' ? 'guided' : 'challenge');
     const nextScenario = view.next_scenario && new URLSearchParams({
       scenario: view.next_scenario, mode: view.mode, environment: view.environment,
@@ -571,10 +604,11 @@
       ${view.mode !== 'demonstration' && feedback.practice_notes?.length ? `<div class="debrief-practice"><strong>Operating habits</strong>
         <ul>${feedback.practice_notes.map(note => `<li>${escape(note)}</li>`).join('')}</ul></div>` : ''}
       ${view.mode === 'guided' && feedback.assistance ? `<p class="debrief-assistance">Help used: ${hints} ${hints === 1 ? 'hint' : 'hints'} · ${demonstrations} ${demonstrations === 1 ? 'demonstration' : 'demonstrations'}</p>` : ''}
-      <div class="actions"><a class="secondary" href="/?${escape(sameSeed)}">Replay same key</a>
-        <a class="secondary" href="/?${escape(replay)}">New key</a>
+      <div class="actions"><button class="secondary" type="button" data-action="replay" ${replaying ? 'disabled aria-busy="true"' : ''}>${replaying ? 'Preparing replay…' : 'Replay with new key'}</button>
         ${view.mode !== 'challenge' && view.scenario.level !== 1 ? `<a class="secondary" href="/?${escape(lessHelp)}">Less help</a>` : ''}
-        ${nextScenario ? `<a class="secondary" href="/?${escape(nextScenario)}">Next scenario</a>` : ''}</div></div>`;
+        ${nextScenario ? `<a class="secondary" href="/?${escape(nextScenario)}">Next scenario</a>` : ''}</div>
+      ${replaying ? '<p role="status">Creating a new mission…</p>' : ''}
+      ${replayError ? `<p class="message error" role="alert">${escape(replayError)}</p>` : ''}</div>`;
   }
 
   function noteForm() {
@@ -1374,6 +1408,7 @@
     const action = event.target.closest('[data-action]')?.dataset.action;
     if (!action) return;
     if (action === 'retry-session') refresh();
+    else if (action === 'replay') replayMission();
     else if (action === 'begin') beginInvestigation();
     else if (action === 'advance' && !demoPaused) demoAdvance?.();
     else if (action === 'pause-demo') setDemoPaused(!demoPaused);

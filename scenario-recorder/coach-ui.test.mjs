@@ -786,10 +786,79 @@ test('terminal minimizes without remounting, resizes, and debrief is centered', 
       'Help used: 1 hint · 0 demonstrations');
     assert.equal(await page.locator('#argocd-coach-host .debrief-steps li').first()
       .evaluate(element => getComputedStyle(element).borderWidth), '0px');
-    assert.equal(await page.locator('#argocd-coach-host a[href^="/?scenario="]').count(), 2);
+    assert.equal(await page.locator('#argocd-coach-host [data-action="replay"]').count(), 1);
+    assert.equal(await page.locator('#argocd-coach-host a[href^="/?scenario="]').count(), 0);
     const modal = await page.locator('#argocd-coach-host .debrief-modal').boundingBox();
     assert.ok(Math.abs(modal.x + modal.width / 2 - 600) < 2, JSON.stringify(modal));
     assert.ok(Math.abs(modal.y + modal.height / 2 - 375) < 2, JSON.stringify(modal));
+  } finally { await browser.close(); }
+});
+
+test('replay starts the same mission in every mode with a fresh key', {timeout: 30000}, async () => {
+  for (const mode of ['demonstration', 'guided', 'challenge']) {
+    const fixturePage = await fixture(mode);
+    const {browser, page} = fixturePage;
+    try {
+      const completed = {...session(mode),
+        scenario: {id: 'missing-configmap', title: 'Shop pods won\'t start', level: 2},
+        environment: 'staging', seed: 111, state: 'COMPLETED',
+        feedback: {total: 82, fixed: true, durable: true, debrief_steps: []}};
+      fixturePage.setView(completed);
+      const requests = [];
+      await page.route('**/coach/learning/api/runs', route => {
+        requests.push(route.request().postDataJSON());
+        return route.fulfill({status: 202, json: {run: {id: 'run-2'}, session: {
+          ...completed, session_id: 'session-2', run_id: 'run-2', seed: 222,
+          state: 'CREATED', feedback: null, connection_token: 'new-token',
+        }}});
+      });
+      await page.route('**/coach/learning/api/runs/run-2', route => route.fulfill({json: {
+        id: 'run-2', state: 'RESETTING', updated_at: '2026-10-05T12:00:01Z',
+      }}));
+      await page.route('**/preparing.html', route => route.fulfill({contentType: 'text/html', body: preparationPage}));
+      await page.reload();
+      const replay = page.locator('#argocd-coach-host [data-action="replay"]');
+      await replay.waitFor();
+      assert.equal(await replay.textContent(), 'Replay with new key');
+      await replay.click();
+      await page.waitForURL('http://lab.test/preparing.html');
+      assert.deepEqual(requests, [{
+        scenario: 'missing-configmap', mode, environment: 'staging', replace_existing: true,
+      }]);
+      assert.equal(await page.locator('#mission-name').textContent(), 'Shop pods won\'t start');
+      assert.deepEqual(await page.evaluate(() => ({
+        pending: JSON.parse(sessionStorage.getItem('argo-coach:preparing')),
+        initial: JSON.parse(sessionStorage.getItem('argo-coach:initial-view:session-2')),
+        oldHandoff: sessionStorage.getItem('argo-coach:handoff'),
+        oldView: sessionStorage.getItem('argo-coach:initial-view:session-1'),
+      })), {
+        pending: {run_id: 'run-2', session_id: 'session-2', token: 'new-token', mode,
+          title: 'Shop pods won\'t start'},
+        initial: {...completed, session_id: 'session-2', run_id: 'run-2', seed: 222,
+          state: 'CREATED', feedback: null},
+        oldHandoff: null, oldView: null,
+      });
+    } finally { await browser.close(); }
+  }
+});
+
+test('replay failure stays on the debrief and allows another attempt', {timeout: 15000}, async () => {
+  const fixturePage = await fixture('guided');
+  const {browser, page} = fixturePage;
+  try {
+    fixturePage.setView({...session('guided'), state: 'COMPLETED',
+      feedback: {total: null, fixed: true, durable: true, debrief_steps: []}});
+    await page.route('**/coach/learning/api/runs', route => route.fulfill({
+      status: 503, json: {error: 'Lab temporarily unavailable'},
+    }));
+    await page.reload();
+    const replay = page.locator('#argocd-coach-host [data-action="replay"]');
+    await replay.click();
+    await page.locator('#argocd-coach-host .debrief-modal [role="alert"]').waitFor();
+    assert.equal(await page.locator('#argocd-coach-host .debrief-modal [role="alert"]').textContent(),
+      'Lab temporarily unavailable');
+    assert.equal(await replay.isEnabled(), true);
+    assert.equal(new URL(page.url()).pathname, '/argocd/applications');
   } finally { await browser.close(); }
 });
 
