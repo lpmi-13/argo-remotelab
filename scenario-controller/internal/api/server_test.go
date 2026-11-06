@@ -129,24 +129,31 @@ func TestAppStatePredicates(t *testing.T) {
 	}
 }
 
-func TestUnhealthyVersionRequiresDeployedHistoryAndUnavailableService(t *testing.T) {
-	run := &Run{Scenario: "console-unhealthy-version", TriggerRevision: "abc123"}
+func TestUnhealthyVersionRequiresPreviousReleaseServing(t *testing.T) {
+	run := &Run{Scenario: "console-unhealthy-version", TriggerRevision: "abc123", ServingRevision: "baseline"}
 	probe := statusProbe("Progressing", "Synced", false)
 	status := probe["status"].(map[string]any)
 	status["history"] = []any{map[string]any{"revision": "baseline"}, map[string]any{"revision": "abc123"}}
-	if !unhealthyVersionDetected(run, probe, false) {
-		t.Fatal("a deployed unhealthy release with no service endpoint should be ready")
+	if !unhealthyVersionDetected(run, probe, true) {
+		t.Fatal("an unready rollout with the previous release still serving should be ready")
 	}
-	if unhealthyVersionDetected(run, probe, true) {
-		t.Fatal("a still-working service should not be described as unhealthy")
+	if unhealthyVersionDetected(run, probe, false) {
+		t.Fatal("the mission requires the previous release to keep serving")
 	}
 	status["history"] = []any{map[string]any{"revision": "baseline"}}
-	if unhealthyVersionDetected(run, probe, false) {
+	if unhealthyVersionDetected(run, probe, true) {
 		t.Fatal("the run should wait until History shows the injected revision")
 	}
-	status["history"] = []any{map[string]any{"revision": "abc123"}}
+	status["history"] = []any{map[string]any{"revision": "older"}, map[string]any{"revision": "abc123"}}
+	if unhealthyVersionDetected(run, probe, true) {
+		t.Fatal("the run should wait until History shows the serving revision before the failed rollout")
+	}
+	status["history"] = []any{map[string]any{"revision": "baseline"}, map[string]any{"revision": "abc123"}, map[string]any{"revision": "abc123"}}
+	if !unhealthyVersionDetected(run, probe, true) {
+		t.Fatal("repeated syncs of the unready revision should not hide the serving release")
+	}
 	status["health"] = map[string]any{"status": "Healthy"}
-	if unhealthyVersionDetected(run, probe, false) {
+	if unhealthyVersionDetected(run, probe, true) {
 		t.Fatal("healthy Application status should not satisfy the unhealthy mission")
 	}
 }

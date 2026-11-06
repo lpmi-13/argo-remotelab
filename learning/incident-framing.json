@@ -23,24 +23,24 @@
     "console-unhealthy-version": {
       "briefing": {
         "source": "Release health alert",
-        "headline": "Which release is on the unhealthy shop service?",
-        "summary": "The ${environment} shop service is failing health checks. Confirm its status and deployed revision."
+        "headline": "Which shop release is still serving?",
+        "summary": "A new ${environment} shop rollout is unhealthy. Find the revision the service still serves."
       },
       "steps": {
         "application": {
           "action": "Find the ${environment} shop Application in Applications and open it.",
           "reason": "The Applications list identifies the affected environment before we inspect its health and version.",
-          "learning": "This is the shop Application whose deployed release is unhealthy."
+          "learning": "This Application has an unhealthy new rollout. Check which release still serves traffic."
         },
         "health": {
           "action": "Read the health badge in the Application header.",
-          "reason": "The badge shows that this deployed workload is not ready, making its version worth investigating.",
-          "learning": "Argo reports ${health} health for this release. Read History to identify its deployed commit."
+          "reason": "The new rollout is not ready. With a rolling update, the previous ready pod can keep serving.",
+          "learning": "Argo reports ${health} health. Compare the newest History revision with the release before it."
         },
         "revision": {
-          "action": "Open History and Rollback and read the latest deployed revision.",
-          "reason": "History identifies the commit Argo deployed even though the service is unhealthy.",
-          "learning": "Argo deployed ${revision} while this service was unhealthy. Health and version answer different questions."
+          "action": "Compare the newest History revision with the previous release's revision.",
+          "reason": "Argo synced the new commit, but its pod is unready. The previous ready pod still serves traffic.",
+          "learning": "Argo synced ${revision}, but that rollout is unready. ${serving_revision} still serves traffic."
         }
       }
     },
@@ -331,7 +331,7 @@
     "console-unhealthy-version": {
       "application": {"action": "We found ${application} in Applications.", "finding": "It is the unhealthy ${environment} release."},
       "health": {"action": "We read the Application header.", "finding": "Argo reports ${answer} health."},
-      "revision": {"action": "We opened History and Rollback.", "finding": "Argo deployed revision ${answer} while the service was unhealthy."}
+      "revision": {"action": "We compared revisions in History and Rollback.", "finding": "The unhealthy ${revision} rollout did not replace ${answer}, which still serves traffic."}
     },
     "console-resources": {
       "deployment": {"action": "We opened the Application tree.", "finding": "It contains Deployment/${answer}."},
@@ -402,7 +402,7 @@
     "console-unhealthy-version": {
       "application": {"what": "Find and click ${application} in Applications.", "look": "Look for the ${application} card with the unhealthy status.", "why": "Its environment label identifies the release with a health problem."},
       "health": {"what": "Open ${application}; read Health in the Application header.", "look": "Look for Health in the Application header.", "why": "The badge shows whether this release is ready to serve traffic."},
-      "revision": {"what": "Open ${application} → History and Rollback; read the latest revision.", "look": "Look for Revision in the newest History entry.", "why": "History identifies the deployed commit behind this unhealthy release."}
+      "revision": {"what": "Open ${application} → History and Rollback; compare the newest revision with the previous one.", "look": "Look for Revision in the History entry immediately before the newest one.", "why": "The new rollout is unready, so the previous revision's ready pod keeps serving."}
     },
     "console-resources": {
       "deployment": {"what": "Open ${application} → Tree; locate Deployment/django.", "look": "Look for Deployment/django in the Application tree.", "why": "The tree lists the workload owned by this Application."},

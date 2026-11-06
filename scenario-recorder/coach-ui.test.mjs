@@ -421,6 +421,41 @@ test('demo stops after one ineffective History click', {timeout: 15000}, async (
   } finally { await browser.close(); }
 });
 
+test('unhealthy release demo points to the previous serving revision', {timeout: 15000}, async () => {
+  const fixturePage = await fixture('demonstration', true);
+  const {browser, page} = fixturePage;
+  fixturePage.setView({...session('demonstration'),
+    scenario: {id: 'console-unhealthy-version', title: 'Find the release still serving', level: 1},
+    health: 'Progressing', fixed: false, checks_passed: 2, checks_total: 3,
+    next_check: {id: 'revision', target: 'app.history', where: 'History and Rollback',
+      demonstration_answer: '0179d2d1234567890abcdef1234567890abcdef1', available: true,
+      demo: {what: 'Compare the newest revision with the previous one.',
+        look: 'Look for Revision in the History entry immediately before the newest one.',
+        why: 'The previous ready pod keeps serving.'}},
+  });
+  await page.route('**/argocd/applications/argocd/shop-web-prod**', route =>
+    route.fulfill({contentType: 'text/html', body: `<!doctype html><html><body>
+      <div class="application-deployment-history" style="margin:100px 0 0 470px;width:500px">
+        <div style="height:110px"><span>Revision:</span> <span id="unready-revision">e4a0e60</span></div>
+        <div style="height:110px"><span>Revision:</span> <span id="serving-revision">0179d2d</span></div>
+      </div><script src="/coach/assets/coach.js"></script></body></html>`}));
+  try {
+    await page.goto('http://lab.test/argocd/applications/argocd/shop-web-prod?view=tree&rollback=0');
+    await page.clock.install();
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    await page.locator('#argocd-coach-host [data-action="advance"]').click();
+    await page.clock.runFor(5500);
+    const highlight = page.locator('#argocd-coach-host .spotlight');
+    await highlight.waitFor();
+    const highlighted = await highlight.boundingBox();
+    const serving = await page.locator('#serving-revision').boundingBox();
+    const unready = await page.locator('#unready-revision').boundingBox();
+    const highlightedCenter = highlighted.y + highlighted.height / 2;
+    assert.ok(Math.abs(highlightedCenter - (serving.y + serving.height / 2)) < 20);
+    assert.ok(Math.abs(highlightedCenter - (unready.y + unready.height / 2)) > 50);
+  } finally { await browser.close(); }
+});
+
 test('already-open History goes straight to evidence without Doing', {timeout: 45000}, async () => {
   const {browser, page} = await fixture('demonstration', true);
   try {

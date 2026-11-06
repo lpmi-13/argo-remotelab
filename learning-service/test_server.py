@@ -145,8 +145,9 @@ class LearningServiceTests(unittest.TestCase):
         self.assertIn("the selected environment", catalog["hmac-mismatch"]["brief"])
         self.assertNotIn("authentication", catalog["hmac-mismatch"]["brief"].lower())
 
-    def test_unhealthy_release_requires_health_and_deployed_revision(self):
+    def test_unhealthy_release_requires_health_and_serving_revision(self):
         run = session(name="console-unhealthy-version", mode="demonstration")
+        run["serving_revision"] = "baseline456"
         unhealthy = probe(False, False)
         unhealthy["status"]["health"]["status"] = "Progressing"
         run["passed"] = {"application"}
@@ -154,20 +155,54 @@ class LearningServiceTests(unittest.TestCase):
         self.assertEqual(health["id"], "health")
         self.assertEqual(health["demonstration_answer"], "Progressing")
         run["passed"].add("health")
-        self.assertEqual(server.next_check(run, unhealthy)["id"], "revision")
+        revision = server.next_check(run, unhealthy)
+        self.assertEqual(revision["id"], "revision")
+        self.assertEqual(revision["demonstration_answer"], "baseline456")
+        self.assertIn("previous one", revision["demo"]["what"])
         run["passed"].add("revision")
-        run["note"] = {"resource": run["application"], "evidence": "Progressing health; deployed revision abc123",
-                       "revision": "abc123", "cause": "The workload is failing its readiness probe",
+        run["note"] = {"resource": run["application"], "evidence": "Progressing health; abc123 unready; baseline456 still serving",
+                       "revision": "baseline456", "cause": "The new rollout is failing its readiness probe",
                        "fix": "No repair requested"}
         feedback = server.score(run, unhealthy)
         self.assertEqual(feedback["message"], "Release evidence verified")
         self.assertFalse(feedback["fixed"])
+        self.assertEqual(feedback["breakdown"]["diagnosis"], 20)
+        self.assertEqual(feedback["deployed_revision"], "baseline456")
         self.assertEqual([step["action"] for step in feedback["debrief_steps"]], [
             "We found shop-web-prod in Applications.",
             "We read the Application header.",
-            "We opened History and Rollback.",
+            "We compared revisions in History and Rollback.",
         ])
         self.assertEqual(feedback["debrief_steps"][1]["finding"], "Argo reports Progressing health.")
+        self.assertEqual(feedback["debrief_steps"][2]["finding"],
+                         "The unhealthy abc123 rollout did not replace baseline456, which still serves traffic.")
+
+    def test_unhealthy_release_rejects_the_new_unready_revision(self):
+        run = session(name="console-unhealthy-version", mode="guided")
+        run["serving_revision"] = "baseline456"
+        run["passed"] = {"application", "health"}
+        run["visited"].add("app.history")
+        unhealthy = probe(False, False)
+        unhealthy["status"]["health"]["status"] = "Progressing"
+        wrong = server.record_action(run, {"sequence": 1, "type": "evidence_check_answered",
+                                           "details": {"check_id": "revision", "answer": "abc123"}}, unhealthy)
+        self.assertFalse(wrong["correct"])
+        right = server.record_action(run, {"sequence": 2, "type": "evidence_check_answered",
+                                           "details": {"check_id": "revision", "answer": "baseline456"}}, unhealthy)
+        self.assertTrue(right["correct"])
+        self.assertEqual(run["answers"]["revision"], "baseline456")
+        self.assertIn("baseline456 still serves traffic", right["message"])
+
+    def test_unhealthy_session_receives_serving_revision_from_controller(self):
+        run = session(name="console-unhealthy-version", mode="demonstration")
+        run["passed"] = {"application", "health"}
+        unhealthy = probe(False, False)
+        unhealthy["status"]["health"]["status"] = "Progressing"
+        view = server.session_view(run, run={"id": "run-test", "state": "READY",
+                                             "serving_revision": "baseline456"}, probe=unhealthy)
+        self.assertEqual(run["serving_revision"], "baseline456")
+        self.assertEqual(view["serving_revision"], "baseline456")
+        self.assertEqual(view["next_check"]["demonstration_answer"], "baseline456")
 
     def test_unhealthy_debrief_keeps_the_health_status_the_learner_observed(self):
         run = session(name="console-unhealthy-version", mode="guided")

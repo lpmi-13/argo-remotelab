@@ -46,6 +46,7 @@ type Run struct {
 	Environment         string         `json:"environment"`
 	Application         string         `json:"application"`
 	TriggerRevision     string         `json:"trigger_revision,omitempty"`
+	ServingRevision     string         `json:"serving_revision,omitempty"`
 	TriggerChartTree    string         `json:"-"`
 	TriggerRenderHash   string         `json:"-"`
 	TriggerRenderFailed bool           `json:"-"`
@@ -298,7 +299,7 @@ func (s *Server) prepareCreate(replace bool) error {
 func manifestFor(run *Run) map[string]any {
 	brief := map[string]string{
 		"console-orientation":       "Find the application for this environment and identify its deployed revision in Argo CD.",
-		"console-unhealthy-version": "Find the unhealthy shop Application, read its health, and identify its deployed revision in History.",
+		"console-unhealthy-version": "Find the unhealthy shop Application, read its health, and identify the revision still serving in History.",
 		"console-resources":         "Find the shop Deployment in the tree and read its readiness probe in the Desired manifest.",
 		"console-history":           "Read the latest deployed revision in History and the result of the last sync operation.",
 		"missing-configmap":         "A release is not starting. Find the affected workload and the most recent warning in Argo CD.",
@@ -347,7 +348,7 @@ func (s *Server) execute(ctx context.Context, run *Run) {
 			log.Printf("run %s: terminate %s: %v", run.ID, app, err)
 		}
 	}
-	if err := s.git.ResetToBaseline(); err != nil {
+	if err := s.git.ResetToBaseline(run.ID); err != nil {
 		s.fail(run, err)
 		return
 	}
@@ -387,6 +388,11 @@ func (s *Server) execute(ctx context.Context, run *Run) {
 			s.fail(run, fmt.Errorf("baseline did not recover for %s: %w", app, err))
 			return
 		}
+	}
+	if run.Scenario == "console-unhealthy-version" {
+		s.mu.Lock()
+		run.ServingRevision = baselineHead
+		s.mu.Unlock()
 	}
 	if !isLevelOne(run.Scenario) || run.Scenario == "console-unhealthy-version" {
 		s.setState(run, "INJECTING", "")
@@ -527,11 +533,25 @@ func latestHistoryRevision(probe map[string]any) string {
 	return revision
 }
 
+func priorHistoryRevision(probe map[string]any, latest string) string {
+	status, _ := probe["status"].(map[string]any)
+	history, _ := status["history"].([]any)
+	for index := len(history) - 2; index >= 0; index-- {
+		entry, _ := history[index].(map[string]any)
+		revision, _ := entry["revision"].(string)
+		if revision != "" && revision != latest {
+			return revision
+		}
+	}
+	return ""
+}
+
 func unhealthyVersionDetected(run *Run, probe map[string]any, endpointOK bool) bool {
-	return run.TriggerRevision != "" && revision(probe) == run.TriggerRevision &&
+	return run.TriggerRevision != "" && run.ServingRevision != "" && revision(probe) == run.TriggerRevision &&
 		syncStatus(probe) == "Synced" && latestHistoryRevision(probe) == run.TriggerRevision &&
+		priorHistoryRevision(probe, run.TriggerRevision) == run.ServingRevision &&
 		(healthOf(probe) == "Progressing" || healthOf(probe) == "Degraded") &&
-		probe["operation_running"] != true && !endpointOK
+		probe["operation_running"] != true && endpointOK
 }
 
 func operationPhase(probe map[string]any) string {
@@ -750,8 +770,8 @@ func publicRun(run *Run) map[string]any {
 	return map[string]any{
 		"id": run.ID, "scenario": run.Scenario, "environment": run.Environment,
 		"application": run.Application, "seed": run.Seed, "state": run.State,
-		"trigger_revision": run.TriggerRevision,
-		"error":            run.Error, "manifest": run.Manifest, "probe": run.Probe,
+		"trigger_revision": run.TriggerRevision, "serving_revision": run.ServingRevision,
+		"error": run.Error, "manifest": run.Manifest, "probe": run.Probe,
 		"created_at": run.CreatedAt, "updated_at": run.UpdatedAt,
 	}
 }

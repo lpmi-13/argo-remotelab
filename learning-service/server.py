@@ -149,6 +149,7 @@ def context_for(session, probe):
         "application": session["application"],
         "environment": session["environment"],
         "revision": (status.get("sync") or {}).get("revision") or probe.get("git_revision") or "",
+        "serving_revision": session.get("serving_revision", ""),
         "health": (status.get("health") or {}).get("status") or "Unknown",
     }
 
@@ -216,6 +217,7 @@ def make_session(run, mode):
         "run_id": run["id"], "mode": mode, "pack": pack,
         "application": run["application"], "environment": run["environment"],
         "trigger_revision": run.get("trigger_revision", ""),
+        "serving_revision": run.get("serving_revision", ""),
         "visited": set(), "passed": set(), "answers": {}, "actions": [], "last_sequence": 0,
         "note": None, "feedback": None, "created_at": time.time(),
     }
@@ -282,8 +284,9 @@ def session_view(session, run=None, probe=None, include_token=False):
     if probe is None:
         _, probe = controller("/probe?application=" + quote(session["application"]))
     with LOCK:
-        if run.get("trigger_revision"):
-            session["trigger_revision"] = run["trigger_revision"]
+        for key in ("trigger_revision", "serving_revision"):
+            if run.get(key):
+                session[key] = run[key]
         return build_session_view(session, run, probe, include_token)
 
 
@@ -315,6 +318,7 @@ def build_session_view(session, run, probe, include_token):
         "sync": (probe.get("status") or {}).get("sync", {}).get("status"),
         "revision": context_for(session, probe)["revision"],
         "trigger_revision": session.get("trigger_revision", ""),
+        "serving_revision": session.get("serving_revision", ""),
         "feedback": session["feedback"],
         "note_draft": session["note"],
     }
@@ -469,9 +473,11 @@ def score(session, probe):
                  any(path.endswith("secrets.yaml") for path in action["details"].get("files", []))
                  for action in session["actions"])
     remediation = (20 if fixed else 0) + (10 if durable else 0) + (5 if collateral and not leaked else 0)
+    expected_revision = (session.get("serving_revision", "") if pack["id"] == "console-unhealthy-version"
+                         else session.get("trigger_revision") or probe.get("git_revision", ""))
     diagnosis = round(20 * (field_credit(note.get("resource"), truth.get("resource")) * 0.35 +
                             field_credit(note.get("cause"), truth.get("cause")) * 0.4 +
-                            field_credit(note.get("revision"), session.get("trigger_revision") or probe.get("git_revision", "")) * 0.25))
+                            field_credit(note.get("revision"), expected_revision) * 0.25))
     decisive_targets = [check_targets(check) for check in pack["checks"]]
     visited = sum(any(target in session["visited"] for target in alternatives) for alternatives in decisive_targets)
     target_fraction = visited / max(1, len(decisive_targets))
@@ -535,7 +541,8 @@ def score(session, probe):
                           "diagnosis": diagnosis, "operational_practice": practice, "efficiency": efficiency},
             "evidence_map": evidence_map, "truth": truth,
             "trigger_revision": session.get("trigger_revision", ""),
-            "deployed_revision": context_for(session, probe)["revision"],
+            "deployed_revision": (session.get("serving_revision", "") if pack["id"] == "console-unhealthy-version"
+                                  else context_for(session, probe)["revision"]),
             "fix_commit": commits[-1] if commits else None,
             "debrief_steps": debrief_steps(session, probe),
             "practice_notes": practice_notes,
@@ -809,8 +816,9 @@ class Handler(BaseHTTPRequestHandler):
             if not session:
                 return
             _, current_run = controller("/api/runs/" + quote(session["run_id"]))
-            if current_run.get("trigger_revision"):
-                session["trigger_revision"] = current_run["trigger_revision"]
+            for key in ("trigger_revision", "serving_revision"):
+                if current_run.get(key):
+                    session[key] = current_run[key]
             if parts[3] == "actions":
                 _, probe = controller("/probe?application=" + quote(session["application"]))
                 status, run = 200, current_run
@@ -827,7 +835,8 @@ class Handler(BaseHTTPRequestHandler):
                     truth = expand(session["pack"]["truth"], context_for(session, probe))
                     session["note"] = {"resource": truth.get("resource", session["application"]),
                                        "evidence": truth.get("evidence", "Healthy and Synced"),
-                                       "revision": context_for(session, probe)["revision"],
+                                       "revision": session.get("answers", {}).get("revision")
+                                                   or context_for(session, probe)["revision"],
                                        "cause": truth.get("cause", "No incident"),
                                        "fix": truth.get("fix", "No fix needed")}
                     with LOCK:

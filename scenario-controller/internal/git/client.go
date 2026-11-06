@@ -142,9 +142,10 @@ func (c *Client) CloneAndModifyOrphan(commitMsg string, modifier func(w *WorkDir
 	return c.cloneAndModify(commitMsg, modifier, true)
 }
 
-// ResetToBaseline makes main point at the immutable baseline tag. The tag is
-// retained even when an injector creates an orphan commit and rewrites main.
-func (c *Client) ResetToBaseline() error {
+// ResetToBaseline starts each run from the immutable baseline tag, then stamps
+// both shop pod templates so Argo records a distinct, healthy release for this
+// run. The tag survives injectors that rewrite main with an orphan commit.
+func (c *Client) ResetToBaseline(runID string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -162,11 +163,54 @@ func (c *Client) ResetToBaseline() error {
 	if err := runGit(tmpDir, "fetch", "--no-tags", "origin", "refs/tags/baseline:refs/tags/baseline"); err != nil {
 		return fmt.Errorf("fetch baseline tag: %w", err)
 	}
-	if err := runGit(tmpDir, "push", "--force", "origin", "refs/tags/baseline:refs/heads/main"); err != nil {
-		return fmt.Errorf("reset main to baseline: %w", err)
+	if err := runGit(tmpDir, "checkout", "-B", "main", "baseline"); err != nil {
+		return fmt.Errorf("check out baseline: %w", err)
+	}
+	if err := runGit(tmpDir, "config", "user.email", "scenario-controller@remotelab.local"); err != nil {
+		return fmt.Errorf("configure baseline author email: %w", err)
+	}
+	if err := runGit(tmpDir, "config", "user.name", "Scenario Controller"); err != nil {
+		return fmt.Errorf("configure baseline author name: %w", err)
+	}
+	for _, chart := range []string{"chart/django-app", "chart/django-app-staging"} {
+		path := filepath.Join(tmpDir, chart, "templates", "deployment.yaml")
+		deployment, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read %s deployment: %w", chart, err)
+		}
+		stamped, err := stampRunDeployment(deployment, runID)
+		if err != nil {
+			return fmt.Errorf("stamp %s deployment: %w", chart, err)
+		}
+		if err := os.WriteFile(path, stamped, 0o644); err != nil {
+			return fmt.Errorf("write %s deployment: %w", chart, err)
+		}
+	}
+	if err := runGit(tmpDir, "add", "chart/django-app/templates/deployment.yaml", "chart/django-app-staging/templates/deployment.yaml"); err != nil {
+		return fmt.Errorf("stage run baseline: %w", err)
+	}
+	if err := runGit(tmpDir, "commit", "-m", "release: refresh shop workload"); err != nil {
+		return fmt.Errorf("commit run baseline: %w", err)
+	}
+	if err := runGit(tmpDir, "push", "--force", "origin", "main"); err != nil {
+		return fmt.Errorf("publish run baseline: %w", err)
 	}
 	return nil
 }
+
+func stampRunDeployment(source []byte, runID string) ([]byte, error) {
+	if !regexp.MustCompile(`^run-[0-9a-f]{16}$`).MatchString(runID) {
+		return nil, fmt.Errorf("invalid run ID")
+	}
+	const anchor = "      annotations:\n"
+	if strings.Count(string(source), anchor) != 1 {
+		return nil, fmt.Errorf("pod template annotations not found exactly once")
+	}
+	marker := anchor + fmt.Sprintf("        remotelab.local/run-id: %q\n", runID)
+	return []byte(strings.Replace(string(source), anchor, marker, 1)), nil
+}
+
+var runStamp = regexp.MustCompile(`(?m)^        remotelab\.local/run-id: "(run-[0-9a-f]{16})"$`)
 
 // Head returns the current main commit, including after a history rewrite.
 func (c *Client) Head() (string, error) {
@@ -260,14 +304,33 @@ func (c *Client) HeadRenderedHash(expectedHead, release, namespace string) (stri
 }
 
 // RestoreChartFromBaseline makes a normal, reviewable fix commit for a
-// demonstration. It restores only the affected chart, preserving changes to
-// other environments and platform applications.
+// demonstration. It keeps this run's pod annotation while restoring the
+// affected chart, so the source diff shows the incident repair.
 func (c *Client) RestoreChartFromBaseline() error {
 	return c.CloneAndModify("fix: restore the affected deployment chart", func(w *WorkDir) error {
+		current, err := w.ReadFile("chart/django-app/templates/deployment.yaml")
+		if err != nil {
+			return err
+		}
+		stamp := runStamp.FindSubmatch(current)
 		if err := runGit(w.dir, "fetch", "--no-tags", "origin", "refs/tags/baseline:refs/tags/baseline"); err != nil {
 			return err
 		}
-		return runGit(w.dir, "checkout", "baseline", "--", c.chartPath)
+		if err := runGit(w.dir, "checkout", "baseline", "--", c.chartPath); err != nil {
+			return err
+		}
+		if len(stamp) == 0 {
+			return nil
+		}
+		baseline, err := w.ReadFile("chart/django-app/templates/deployment.yaml")
+		if err != nil {
+			return err
+		}
+		stamped, err := stampRunDeployment(baseline, string(stamp[1]))
+		if err != nil {
+			return err
+		}
+		return w.WriteFile("chart/django-app/templates/deployment.yaml", stamped)
 	})
 }
 
