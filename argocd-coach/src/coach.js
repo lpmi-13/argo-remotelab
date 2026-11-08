@@ -20,6 +20,7 @@
   const demoNarrationKey = `argo-coach:demo-narration:${config.session}`;
   const demoAttemptsKey = `argo-coach:demo-attempts:${config.session}`;
   const demoPausedKey = `argo-coach:demo-paused:${config.session}`;
+  const debriefDismissedKey = `argo-coach:debrief-dismissed:${config.session}`;
   let sequence = Number(sessionStorage.getItem(seqKey) || 0);
   let view = JSON.parse(sessionStorage.getItem(initialViewKey) || 'null');
   if (view?.session_id !== config.session) view = null;
@@ -30,6 +31,9 @@
   let replayError = '';
   let briefOpen = !sessionStorage.getItem(startedKey);
   let noteOpen = false;
+  // Learners may close the final debrief to keep exploring the lab; the
+  // completed-mission panel reopens it.
+  let debriefDismissed = sessionStorage.getItem(debriefDismissedKey) === 'true';
   let collapsed = sessionStorage.getItem(collapsedKey) === 'true';
   const savedPosition = JSON.parse(sessionStorage.getItem(positionKey) || 'null');
   let panelPosition = savedPosition && Number.isFinite(savedPosition.x) && Number.isFinite(savedPosition.y)
@@ -151,7 +155,7 @@
     if (stream) { stream.onclose = null; stream.close(); stream = null; }
     for (const key of ['argo-coach:handoff', 'argo-coach:argocd-landing', startedKey, initialViewKey,
       seqKey, collapsedKey, positionKey, demoPatchKey, demoFixKey, demoGitKey, demoNarrationKey,
-      demoAttemptsKey, demoPausedKey]) sessionStorage.removeItem(key);
+      demoAttemptsKey, demoPausedKey, debriefDismissedKey]) sessionStorage.removeItem(key);
   }
 
   function returnToMissions() {
@@ -208,6 +212,9 @@
   }
 
   function sendAction(type, details = {}) {
+    // The run is scored. Exploring after the debrief must not add evidence or
+    // coaching messages to a finished mission.
+    if (view?.feedback) return sending;
     sequence += 1;
     sessionStorage.setItem(seqKey, String(sequence));
     const action = {protocol_version: 2, sequence, type, actor: view?.mode === 'demonstration' ? 'tutorial' : 'learner',
@@ -634,7 +641,8 @@
     const nextScenario = view.next_scenario && new URLSearchParams({
       scenario: view.next_scenario, mode: view.mode, environment: view.environment,
     });
-    return `<div class="debrief-content"><h2 id="debrief-title">Debrief${feedback.total == null ? '' : ` · ${escape(feedback.total)} / 100`}</h2>
+    return `<div class="debrief-content"><div class="debrief-header"><h2 id="debrief-title">Debrief${feedback.total == null ? '' : ` · ${escape(feedback.total)} / 100`}</h2>
+        <button class="icon-button" type="button" data-action="dismiss-debrief" aria-label="Close debrief and explore the lab" title="Close debrief and explore the lab">×</button></div>
       <p class="debrief-outcome">${escape(outcome)}</p>
       ${steps.length ? `<ol class="debrief-steps" aria-label="Steps taken and what we learned">${steps.map(step =>
         `<li><strong>${escape(step.action)}</strong><p>${escape(step.finding)}</p></li>`).join('')}</ol>`
@@ -649,9 +657,38 @@
       ${view.mode === 'guided' && feedback.assistance ? `<p class="debrief-assistance">Help used: ${hints} ${hints === 1 ? 'hint' : 'hints'} · ${demonstrations} ${demonstrations === 1 ? 'demonstration' : 'demonstrations'}</p>` : ''}
       <div class="actions"><button class="secondary" type="button" data-action="replay" ${replaying ? 'disabled aria-busy="true"' : ''}>${replaying ? 'Preparing replay…' : 'Replay with new key'}</button>
         ${view.mode !== 'challenge' && view.scenario.level !== 1 ? `<a class="secondary" href="/?${escape(lessHelp)}">Less help</a>` : ''}
-        ${nextScenario ? `<a class="secondary" href="/?${escape(nextScenario)}">Next scenario</a>` : ''}</div>
+        ${nextScenario ? `<a class="secondary" href="/?${escape(nextScenario)}">Next scenario</a>` : ''}
+        <button class="secondary" type="button" data-action="dismiss-debrief">Explore the lab</button></div>
       ${replaying ? '<p role="status">Creating a new mission…</p>' : ''}
       ${replayError ? `<p class="message error" role="alert">${escape(replayError)}</p>` : ''}</div>`;
+  }
+
+  function completedSummary(sourceActions) {
+    const feedback = view.feedback;
+    return `<p class="step-eyebrow">Mission complete${feedback.total == null ? '' : ` · ${escape(feedback.total)} / 100`}</p>
+      <h2>${escape(view.briefing?.headline || view.scenario.title)}</h2>
+      <p class="small muted">Explore the lab as long as you like. The run is finished, so nothing you do now changes the debrief.</p>
+      <div class="actions"><button id="debrief-reopen" class="primary" type="button" data-action="show-debrief">View debrief</button>${sourceActions}</div>`;
+  }
+
+  function dismissDebrief() {
+    if (!view?.feedback || debriefDismissed || replaying) return;
+    debriefDismissed = true;
+    sessionStorage.setItem(debriefDismissedKey, 'true');
+    message = '';
+    error = false;
+    // Return to an open panel so the learner can see how to reopen the debrief.
+    collapsed = false;
+    autoCollapsed = false;
+    sessionStorage.setItem(collapsedKey, 'false');
+    render();
+    (root.querySelector('#debrief-reopen') || root.querySelector('[data-action="collapse"]'))?.focus();
+  }
+
+  function showDebrief() {
+    debriefDismissed = false;
+    sessionStorage.removeItem(debriefDismissedKey);
+    render();
   }
 
   function noteForm() {
@@ -705,7 +742,8 @@
         <button class="secondary" data-action="retry-session">Retry</button></div></div>` : '';
       return;
     }
-    host.toggleAttribute('data-debrief', Boolean(view.feedback));
+    const debriefOpen = Boolean(view.feedback) && !debriefDismissed;
+    host.toggleAttribute('data-debrief', debriefOpen);
     if (view.mode === 'demonstration' && autoCollapsed) {
       collapsed = false;
       autoCollapsed = false;
@@ -716,21 +754,27 @@
     if (root.querySelector('.evidence-map')) evidenceMapOpen = root.querySelector('.evidence-map').open;
     if (root.querySelector('.demo-patch')) demoPatchOpen = root.querySelector('.demo-patch').open;
     host.toggleAttribute('data-native-overlay', nativeOverlayOpen && view.mode === 'demonstration');
-    if (view.mode === 'demonstration' && (view.feedback || demoPatch?.diff ||
+    if (view.mode === 'demonstration' && !view.feedback && (demoPatch?.diff ||
         (!view.next_check && view.scenario.level !== 1))) {
-      // Show the source change and debrief even if Argo's resource or History
-      // drawer previously collapsed the coach.
+      // Show the source change even if Argo's resource or History drawer
+      // previously collapsed the coach.
       collapsed = false;
       autoCollapsed = false;
-      if (view.feedback) pointer.removeAttribute('data-visible');
     }
+    if (view.feedback) pointer.removeAttribute('data-visible');
     syncClock();
     const preparing = !['READY', 'INVESTIGATING', 'FIXED', 'COMPLETED', 'FAILED', 'ABORTED'].includes(view.state);
-    if (view.feedback) {
-      root.innerHTML = `<div class="modal-wrap"><div class="modal debrief-modal" role="dialog" aria-modal="true" aria-labelledby="debrief-title">${debrief()}</div></div>`;
+    if (debriefOpen) {
+      const oldDebrief = root.querySelector('.debrief-modal');
+      const focusedInside = oldDebrief?.contains(shadow.activeElement);
+      const focusedAction = focusedInside ? shadow.activeElement?.dataset.action : null;
+      root.innerHTML = `<div class="modal-wrap"><div class="modal debrief-modal" role="dialog" aria-modal="true" aria-labelledby="debrief-title" tabindex="-1">${debrief()}</div></div>`;
+      const newDebrief = root.querySelector('.debrief-modal');
+      if (focusedAction) root.querySelector(`[data-action="${focusedAction}"]:not(:disabled)`)?.focus({preventScroll: true});
+      else if (!oldDebrief || focusedInside) newDebrief.focus({preventScroll: true});
       return;
     }
-    if (briefOpen && !['FAILED', 'ABORTED', 'COMPLETED'].includes(view.state)) {
+    if (briefOpen && !view.feedback && !['FAILED', 'ABORTED', 'COMPLETED'].includes(view.state)) {
       const oldBrief = root.querySelector('.incident-briefing');
       const scrollTop = oldBrief?.scrollTop || 0;
       const focusedInside = oldBrief?.contains(shadow.activeElement);
@@ -745,12 +789,15 @@
       updateBriefCountdown();
       return;
     }
-    const showGitSource = view.fix_surface !== 'none' && view.mode !== 'demonstration' && !recentLearning;
-    const showTerminal = view.mode !== 'demonstration' &&
+    // Once the mission is complete every mode may explore Git and the terminal.
+    const exploring = Boolean(view.feedback);
+    const showGitSource = view.fix_surface !== 'none' && (exploring || (view.mode !== 'demonstration' && !recentLearning));
+    const showTerminal = (exploring || view.mode !== 'demonstration') &&
       ['git', 'argo-and-git', 'terminal'].includes(view.fix_surface);
     const sourceActions = `${showGitSource ? '<button class="secondary" data-action="gitea">View Git source</button>' : ''}
       ${showTerminal ? `<button class="secondary" data-action="terminal">${!terminalOpen ? 'Open terminal' : terminalMinimized ? 'Restore terminal' : 'Minimize terminal'}</button>` : ''}`;
-    const body = preparing ? `<p>Preparing the environment and waiting for Argo CD to show the incident…</p>`
+    const body = exploring ? completedSummary(sourceActions)
+      : preparing ? `<p>Preparing the environment and waiting for Argo CD to show the incident…</p>`
       : view.state === 'FAILED' ? `<p class="message error">${escape(view.run_error || 'The run could not start.')}</p>`
       : view.state === 'ABORTED' ? '<p>The run was stopped.</p><a class="secondary" href="/">Return to missions</a>'
       : `${view.mode === 'demonstration' ? `<p class="driving">✦ Demo ${demoPaused ? 'paused' : 'running'}</p>` : ''}
@@ -766,14 +813,15 @@
     const previousValues = new Map(Array.from(root.querySelectorAll('input, textarea')).map(element => [element.id, element.value]));
     const active = shadow.activeElement?.id;
     const stepId = demoStepId();
-    const doing = view.mode === 'demonstration' && demoNarration?.id === stepId && demoNarration?.phase === 'doing';
+    const doing = !exploring && view.mode === 'demonstration' && demoNarration?.id === stepId && demoNarration?.phase === 'doing';
+    const demoRunning = view.mode === 'demonstration' && !exploring && !['ABORTED', 'COMPLETED', 'FAILED'].includes(view.state);
     root.innerHTML = `<aside class="panel" ${collapsed ? 'data-collapsed' : ''} ${doing ? 'data-doing' : ''} aria-label="Argo CD Coach">
       <div class="header panel-controls">
       <button id="coach-move" class="coach-drag-handle" type="button" aria-label="Move coach. Drag or use arrow keys." title="Drag to move coach; use arrow keys when focused">⠿ Move</button>
-      ${view.mode === 'demonstration' && !['ABORTED', 'COMPLETED', 'FAILED'].includes(view.state) ? '<button class="secondary stop-button" data-action="stop" aria-label="Stop demonstration">Stop</button>' : ''}
-      ${view.mode === 'demonstration' && !['ABORTED', 'COMPLETED', 'FAILED'].includes(view.state) ? `<button class="secondary stop-button" data-action="pause-demo" aria-label="${demoPaused ? 'Resume' : 'Pause'} demonstration">${demoPaused ? 'Resume' : 'Pause'}</button>` : ''}
+      ${demoRunning ? '<button class="secondary stop-button" data-action="stop" aria-label="Stop demonstration">Stop</button>' : ''}
+      ${demoRunning ? `<button class="secondary stop-button" data-action="pause-demo" aria-label="${demoPaused ? 'Resume' : 'Pause'} demonstration">${demoPaused ? 'Resume' : 'Pause'}</button>` : ''}
       <button class="icon-button" data-action="collapse" aria-label="${collapsed ? 'Expand' : 'Collapse'} coach">${collapsed ? '▣' : '−'}</button></div>
-      ${collapsed ? '' : `<div class="body">${body}${message ? `<div class="message ${error ? 'error' : ''}" role="status">${escape(message)}</div>` : ''}${view.mode === 'demonstration' ? demoTimerMarkup() : ''}</div>`}
+      ${collapsed ? '' : `<div class="body">${body}${message ? `<div class="message ${error ? 'error' : ''}" role="status">${escape(message)}</div>` : ''}${view.mode === 'demonstration' && !exploring ? demoTimerMarkup() : ''}</div>`}
     </aside>${noteOpen ? noteForm() : ''}`;
     if (panelPosition) positionCoach(root.querySelector('.panel'), panelPosition.x, panelPosition.y);
     for (const [id, value] of previousValues) {
@@ -1590,6 +1638,8 @@
     if (!action) return;
     if (action === 'retry-session') refresh();
     else if (action === 'replay') replayMission();
+    else if (action === 'dismiss-debrief') dismissDebrief();
+    else if (action === 'show-debrief') showDebrief();
     else if (action === 'begin') beginInvestigation();
     else if (action === 'advance' && !demoPaused) demoAdvance?.();
     else if (action === 'pause-demo') setDemoPaused(!demoPaused);
@@ -1747,6 +1797,9 @@
   });
   addEventListener('pointerdown', () => stepClock.input(), {passive: true});
   addEventListener('keydown', () => stepClock.input(), {passive: true});
+  addEventListener('keydown', event => {
+    if (event.key === 'Escape' && view?.feedback && !debriefDismissed) dismissDebrief();
+  });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       pauseBriefCountdown();

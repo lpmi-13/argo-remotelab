@@ -826,6 +826,12 @@ class Handler(BaseHTTPRequestHandler):
                 if current_run.get(key):
                     session[key] = current_run[key]
             if parts[3] == "actions":
+                if session["feedback"] is not None:
+                    # Learners may keep exploring after the debrief. The run is
+                    # already scored, so later actions must not re-score it.
+                    self.respond(202, {"evaluation": {"accepted": False, "reason_code": "run_complete"},
+                                       "session": session_view(session, run=current_run)})
+                    return
                 _, probe = controller("/probe?application=" + quote(session["application"]))
                 status, run = 200, current_run
                 if status == 200 and run.get("state") == "READY":

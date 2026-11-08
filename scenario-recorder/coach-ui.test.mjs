@@ -59,7 +59,7 @@ async function fixture(mode, history = false, applicationCard = false, fixSurfac
       input() {}
     };
     window.ArgoActionObserver = class {
-      constructor(emit) { this.emit = emit; this.seen = new Set(); this.fromURL(); }
+      constructor(emit) { this.emit = emit; window.__coachEmit = emit; this.seen = new Set(); this.fromURL(); }
       fromURL() {
         if (!applicationCard) return;
         const detail = location.pathname.includes('/applications/argocd/shop-web-prod');
@@ -1166,4 +1166,58 @@ test('unhealthy Level 1 mission ends with an evidence debrief', {timeout: 15000}
     assert.match(await page.locator('#argocd-coach-host .debrief-steps').innerText(),
       /We read the Application header\.\s+Argo reports Progressing health\./);
   } finally { await browser.close(); }
+});
+
+test('the final debrief can be closed to explore the lab and reopened in every mode', {timeout: 45000}, async () => {
+  for (const mode of ['demonstration', 'guided', 'challenge']) {
+    const fixturePage = await fixture(mode, false, false, 'git');
+    const {browser, page, actions} = fixturePage;
+    const coach = (selector, options) => page.locator(`#argocd-coach-host ${selector}`, options);
+    const focused = () => page.evaluate(() =>
+      document.querySelector('#argocd-coach-host').shadowRoot.activeElement?.id ||
+      document.querySelector('#argocd-coach-host').shadowRoot.activeElement?.className || null);
+    try {
+      fixturePage.setView({...session(mode), state: 'COMPLETED', next_check: null,
+        scenario: {id: 'missing-configmap', title: 'Shop pods are failing to start', level: 2},
+        briefing: {source: 'Pod startup alert', headline: 'Shop pods are failing to start',
+          summary: 'New prod shop pods are failing to start after a release.'},
+        fix_surface: 'git', fix_paths: ['chart/django-app/templates/deployment.yaml'],
+        feedback: {message: 'Run complete.', total: 82, fixed: true, durable: true, debrief_steps: []}});
+      await page.reload();
+      await coach('.debrief-modal').waitFor();
+      assert.equal(await focused(), 'modal debrief-modal', mode);
+      assert.equal(await page.locator('#argocd-coach-host[data-debrief]').count(), 1, mode);
+
+      await coach('.debrief-content .actions button', {hasText: 'Explore the lab'}).click();
+      assert.equal(await coach('.modal-wrap').count(), 0, mode);
+      assert.equal(await page.locator('#argocd-coach-host[data-debrief]').count(), 0, mode);
+      assert.match(await coach('.panel').innerText(), /Mission complete · 82 \/ 100\s+Shop pods are failing to start/i);
+      assert.equal(await focused(), 'debrief-reopen', mode);
+      assert.equal(await coach('.panel [data-action="stop"], .panel [data-action="pause-demo"]').count(), 0, mode);
+      assert.equal(await coach('.panel [data-action="gitea"]').count(), 1, mode);
+
+      // Exploring the completed run adds no evidence to it.
+      const recorded = actions.length;
+      await page.evaluate(() => window.__coachEmit('target_visited', {target: 'app.history', application: 'shop-web-prod'}));
+      assert.equal(actions.length, recorded, mode);
+
+      await coach('.panel [data-action="terminal"]').click();
+      assert.equal(await coach('.terminal-dock').isVisible(), true, mode);
+
+      await page.reload();
+      await coach('.panel #debrief-reopen').waitFor();
+      assert.equal(await coach('.debrief-modal').count(), 0, mode);
+
+      await coach('#debrief-reopen').click();
+      await coach('.debrief-modal').waitFor();
+      assert.equal(await coach('.debrief-modal [data-action="replay"]').count(), 1, mode);
+      await page.keyboard.press('Escape');
+      await coach('.panel #debrief-reopen').waitFor();
+
+      await coach('#debrief-reopen').click();
+      await coach('.debrief-header [aria-label="Close debrief and explore the lab"]').click();
+      await coach('.panel #debrief-reopen').waitFor();
+      assert.equal(await coach('.debrief-modal').count(), 0, mode);
+    } finally { await browser.close(); }
+  }
 });

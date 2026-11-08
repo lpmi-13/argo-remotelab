@@ -87,6 +87,9 @@ a.secondary { display: inline-flex; align-items: center; padding: var(--coach-bu
 .modal .mark { margin-bottom: 8px; }
 .debrief-modal { width: min(620px, calc(100vw - 28px)); padding: 24px; }
 .debrief-content h2 { font-size: 24px; }
+.debrief-header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.debrief-header .icon-button { flex: none; margin: -10px -12px 0 0; }
+.debrief-modal:focus { outline: none; }
 .debrief-outcome { margin: 0; font-size: 15px; line-height: 1.45; }
 .debrief-steps { margin: 17px 0 0; padding-left: 25px; }
 .debrief-steps li { padding-left: 5px; }

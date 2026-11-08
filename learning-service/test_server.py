@@ -487,6 +487,30 @@ class LearningServiceTests(unittest.TestCase):
         self.assertEqual(active["actions"][0]["details"], {"verb": "kubectl", "exit_code": 0})
         self.assertEqual(stale["actions"], [])
 
+    def test_exploring_after_the_debrief_does_not_rescore_the_run(self):
+        run = session(name="console-orientation", mode="guided")
+        run["token"] = "session-token"
+        feedback = {"total": None, "fixed": True, "debrief_steps": []}
+        run["feedback"] = feedback
+        handler = object.__new__(server.Handler)
+        handler.path = "/api/sessions/test/actions"
+        handler.headers = {"Authorization": "Bearer session-token"}
+        handler.body = lambda: {"sequence": 1, "type": "target_visited",
+                                "details": {"target": "app.history", "application": "shop-web-prod"}}
+        replies = []
+        handler.respond = lambda status, body: replies.append((status, body))
+        calls = []
+        with patch.dict(server.SESSIONS, {"test": run}, clear=True), \
+             patch.object(server, "controller", side_effect=lambda *args: calls.append(args) or (200, {"state": "COMPLETED"})), \
+             patch.object(server, "session_view", return_value={"feedback": feedback}):
+            handler.do_POST()
+        self.assertEqual(replies, [(202, {"evaluation": {"accepted": False, "reason_code": "run_complete"},
+                                          "session": {"feedback": feedback}})])
+        self.assertEqual(run["actions"], [])
+        self.assertEqual(run["visited"], set())
+        self.assertIs(run["feedback"], feedback)
+        self.assertFalse(any("/state" in str(call[0]) for call in calls))
+
 
 if __name__ == "__main__":
     unittest.main()
