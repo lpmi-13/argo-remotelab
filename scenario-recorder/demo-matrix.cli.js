@@ -55,7 +55,8 @@ async (page) => {
             };
           });
         } catch (error) {
-          if (/Execution context was destroyed|navigation/.test(error.message)) {
+          // A coach navigation can abort this fetch before the context is torn down.
+          if (/Execution context was destroyed|navigation|Failed to fetch/.test(error.message)) {
             await page.waitForTimeout(500);
             continue;
           }
