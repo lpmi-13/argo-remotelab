@@ -7,6 +7,21 @@ import (
 	"github.com/lpmi-13/argo-remotelab/scenario-controller/internal/git"
 )
 
+// The trigger annotation goes on the pod template next to the scrape
+// annotation. Anchoring on that line alone leaves room for other annotations,
+// such as the run stamp the controller adds to every baseline.
+const (
+	staleJobAnchor  = "        prometheus.io/scrape: \"true\"\n"
+	staleJobTrigger = "        remotelab.io/stale-job-trigger: \"enabled\"\n"
+)
+
+func addStaleJobTrigger(deployment string) (string, error) {
+	if strings.Count(deployment, staleJobAnchor) != 1 {
+		return "", fmt.Errorf("could not add sync trigger annotation in deployment.yaml")
+	}
+	return strings.Replace(deployment, staleJobAnchor, staleJobTrigger+staleJobAnchor, 1), nil
+}
+
 // StaleJob modifies the migration Job template so the PreSync migration fails.
 // ArgoCD cannot complete the sync while the hook Job is failing.
 type StaleJob struct{}
@@ -53,12 +68,9 @@ func (s *StaleJob) Inject(gitClient *git.Client) error {
 				return fmt.Errorf("failed to read %s: %w", DeploymentFile, err)
 			}
 
-			deployContent := string(deployData)
-			deployMarker := "      annotations:\n        prometheus.io/scrape: \"true\""
-			deployInjection := "      annotations:\n        remotelab.io/stale-job-trigger: \"enabled\"\n        prometheus.io/scrape: \"true\""
-			deployModified := strings.Replace(deployContent, deployMarker, deployInjection, 1)
-			if deployModified == deployContent {
-				return fmt.Errorf("could not add sync trigger annotation in deployment.yaml")
+			deployModified, err := addStaleJobTrigger(string(deployData))
+			if err != nil {
+				return err
 			}
 
 			return w.WriteFile(DeploymentFile, []byte(deployModified))
@@ -91,10 +103,7 @@ func (s *StaleJob) Revert(gitClient *git.Client) error {
 				return fmt.Errorf("failed to read %s: %w", DeploymentFile, err)
 			}
 
-			deployContent := string(deployData)
-			deployInjection := "      annotations:\n        remotelab.io/stale-job-trigger: \"enabled\"\n        prometheus.io/scrape: \"true\""
-			deployMarker := "      annotations:\n        prometheus.io/scrape: \"true\""
-			deployModified := strings.Replace(deployContent, deployInjection, deployMarker, 1)
+			deployModified := strings.Replace(string(deployData), staleJobTrigger, "", 1)
 			return w.WriteFile(DeploymentFile, []byte(deployModified))
 		},
 	)
