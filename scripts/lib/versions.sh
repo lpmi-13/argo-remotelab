@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 
-readonly DEFAULT_FIRST_PARTY_IMAGE_TAG="v12"
+readonly DEFAULT_FIRST_PARTY_IMAGE_TAG="v13"
 readonly ROOTFS_IMAGE_REPO="ghcr.io/lpmi-13/argo-remotelab-k3s-rootfs"
-readonly DEFAULT_IXIMIUZ_ROOTFS_IMAGE="ghcr.io/lpmi-13/argo-remotelab-k3s-rootfs:v12"
-readonly DEFAULT_IXIMIUZ_ROOTFS_RELEASE="b3903e8c.1"
+readonly DEFAULT_IXIMIUZ_ROOTFS_IMAGE="ghcr.io/lpmi-13/argo-remotelab-k3s-rootfs:v13"
+# This iximiuz base ships k3s v1.36.4+k3s1, matching LAB_K3S_VERSION's minor version.
+readonly DEFAULT_IXIMIUZ_ROOTFS_RELEASE="0f076c61"
+
+# New Colima profiles install this k3s release; Argo CD 3.5 is tested on Kubernetes 1.33-1.36.
+readonly LAB_K3S_VERSION="v1.36.6+k3s1"
 
 readonly DJANGO_IMAGE_REPO="ghcr.io/lpmi-13/argo-remotelab-django"
 readonly SCENARIO_CONTROLLER_IMAGE_REPO="ghcr.io/lpmi-13/argo-remotelab-scenario-controller"

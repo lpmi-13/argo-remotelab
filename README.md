@@ -34,6 +34,8 @@ On macOS, use an isolated Colima k3s cluster. The deployment script creates or r
 
 Prerequisites: Colima with k3s and containerd on macOS, or an installed k3s systemd service on Linux; plus `kubectl`, `helm`, `age-keygen`, `sops`, `jq`, and Docker or `nerdctl` for local image builds. Local development pins Node 24.21.0 in `.nvmrc` and Python 3.14.8 in `.python-version`; deployment images carry their own runtime pins. The script checks the required tools during setup.
 
+The lab targets Kubernetes 1.36 (k3s `v1.36.6+k3s1`, pinned as `LAB_K3S_VERSION` in `scripts/lib/versions.sh`), the newest release Argo CD 3.5 is tested on. New Colima profiles install that version, and the iximiuz playground's base rootfs (`0f076c61`) ships k3s `v1.36.4+k3s1`. On Linux, install it with `curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=v1.36.6+k3s1 sh -`. The deployment script warns when the cluster runs a different minor version; upgrade an existing k3s cluster [one minor version at a time](https://docs.k3s.io/upgrades/manual).
+
 On Apple Silicon, install OpenSSH with Apple Silicon Homebrew so Colima can find a native `ssh-keygen` when creating its first VM:
 
 ```bash
@@ -123,14 +125,16 @@ schema change requires a fresh lab build.
 
 ## Publish an iximiuz rootfs image
 
-After signing in to GHCR with Docker, run one command with a new version tag:
+After signing in to GHCR with Docker, run one command:
 
 ```bash
-bash scripts/publish-rootfs-image.sh v9
+bash scripts/publish-rootfs-image.sh
 ```
 
-The command rebuilds and pushes all six first-party images and the rootfs image
-under that tag. After the rootfs push succeeds, it updates the application image
+The command picks the next version after `DEFAULT_FIRST_PARTY_IMAGE_TAG` in
+`scripts/lib/versions.sh` (for example, `v12` becomes `v13`), then rebuilds and
+pushes all six first-party images and the rootfs image under that tag. To choose
+the tag yourself, pass it as the only argument. After the rootfs push succeeds, it updates the application image
 references, `scripts/lib/versions.sh`, and
 `playground/iximiuz/manifest.yaml` to use the new tag, then updates the remote
 iximiuz playground with `labctl playground update`. Install `labctl` first;

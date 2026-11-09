@@ -6,13 +6,25 @@ source "${repo_root}/scripts/lib/versions.sh"
 
 usage() {
   cat <<'EOF'
-Usage: bash scripts/publish-rootfs-image.sh <new-image-tag>
+Usage: bash scripts/publish-rootfs-image.sh [new-image-tag]
        bash scripts/publish-rootfs-image.sh --sync-remote
 
 Builds and pushes the first-party images and iximiuz rootfs image, then updates
 the checked-in image references and the remote iximiuz playground after a
-successful push. --sync-remote retries only the playground update.
+successful push. Without a tag, it publishes the next version after the current
+one in scripts/lib/versions.sh (v12 becomes v13). --sync-remote retries only the
+playground update.
 EOF
+}
+
+next_image_tag() {
+  local current="$1"
+
+  if [[ ! "${current}" =~ ^v([0-9]+)$ ]]; then
+    echo "error: cannot increment image tag '${current}'; pass a new tag explicitly." >&2
+    return 1
+  fi
+  printf 'v%d\n' "$((10#${BASH_REMATCH[1]} + 1))"
 }
 
 playground_manifest="${repo_root}/playground/iximiuz/manifest.yaml"
@@ -57,12 +69,16 @@ if [[ "${1:-}" == "--sync-remote" && $# -eq 1 ]]; then
   exit 0
 fi
 
-if [[ $# -ne 1 ]]; then
+if [[ $# -gt 1 || "${1:-}" == -* ]]; then
   usage >&2
   exit 1
 fi
 
-image_tag="$1"
+if [[ $# -eq 1 ]]; then
+  image_tag="$1"
+else
+  image_tag="$(next_image_tag "${DEFAULT_FIRST_PARTY_IMAGE_TAG}")"
+fi
 if [[ ! "${image_tag}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
   echo "error: invalid image tag '${image_tag}'." >&2
   exit 1
@@ -76,6 +92,7 @@ fi
 
 ensure_labctl_authenticated
 
+echo "Publishing ${image_tag} (replacing ${DEFAULT_FIRST_PARTY_IMAGE_TAG})..."
 IMAGE_TAG="${image_tag}" \
 ROOTFS_IMAGE="${rootfs_image}" \
 BUILD_IMAGES=1 \

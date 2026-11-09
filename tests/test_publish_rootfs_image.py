@@ -122,6 +122,42 @@ esac
         self.assertIn("labctl is required", result.stderr)
         self.assertEqual(self._calls(), [])
 
+    def _set_current_tag(self, tag):
+        versions = self.repo / "scripts/lib/versions.sh"
+        text = re.sub(
+            r'^(readonly DEFAULT_FIRST_PARTY_IMAGE_TAG=")[^"]+(")',
+            rf"\g<1>{tag}\g<2>", versions.read_text(), flags=re.MULTILINE,
+        )
+        text = re.sub(
+            r'^(readonly DEFAULT_IXIMIUZ_ROOTFS_IMAGE="[^:"]+:)[^"]+(")',
+            rf"\g<1>{tag}\g<2>", text, flags=re.MULTILINE,
+        )
+        versions.write_text(text)
+
+    def test_without_tag_publishes_next_version_everywhere(self):
+        self._set_current_tag("v09")
+        result = self._run(TEST_TAG="v10")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self._calls()
+        for repo in ("scenario-controller", "argocd-tools", "django",
+                     "learning-service", "lab-gateway", "lab-terminal", "k3s-rootfs"):
+            self.assertIn(f"docker push ghcr.io/lpmi-13/argo-remotelab-{repo}:v10", calls)
+        self.assertTrue(calls[-1].startswith("labctl playground update "))
+        versions = (self.repo / "scripts/lib/versions.sh").read_text()
+        self.assertIn('DEFAULT_FIRST_PARTY_IMAGE_TAG="v10"', versions)
+        self.assertIn("argo-remotelab-k3s-rootfs:v10", versions)
+        self.assertIn(
+            "ghcr.io/lpmi-13/argo-remotelab-scenario-controller:v10",
+            (self.repo / "manifests/applications/scenario-controller.yaml").read_text(),
+        )
+
+    def test_without_tag_rejects_a_tag_it_cannot_increment(self):
+        self._set_current_tag("release-a")
+        result = self._run()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("pass a new tag explicitly", result.stderr)
+        self.assertEqual(self._calls(), [])
+
     def test_remote_failure_can_be_retried_without_rebuilding(self):
         result = self._run(TAG, FAIL_REMOTE_UPDATE="1")
         self.assertNotEqual(result.returncode, 0)

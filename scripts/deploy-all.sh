@@ -333,6 +333,27 @@ repair_linux_k3s_ip_if_needed() {
     echo "  OK: k3s now advertises $desired_ip"
 }
 
+warn_if_kubernetes_version_differs() {
+    local server_version server_minor target_minor
+
+    server_version=$(kubectl version -o json 2>/dev/null | jq -r '.serverVersion.gitVersion // empty' 2>/dev/null) || true
+    [[ "$server_version" =~ ^v1\.([0-9]+)\. ]] || return 0
+    server_minor=${BASH_REMATCH[1]}
+    [[ "$LAB_K3S_VERSION" =~ ^v1\.([0-9]+)\. ]] || return 0
+    target_minor=${BASH_REMATCH[1]}
+    if (( server_minor == target_minor )); then
+        echo "  OK: Kubernetes ${server_version}"
+        return 0
+    fi
+
+    echo "  WARNING: Cluster runs Kubernetes ${server_version}; this lab is tested on ${LAB_K3S_VERSION}." >&2
+    if [[ "$OS" == "Darwin" ]]; then
+        echo "           To use it, run 'colima delete --profile ${COLIMA_PROFILE}' and rerun this script." >&2
+    else
+        echo "           Upgrade k3s one minor version at a time: https://docs.k3s.io/upgrades/manual" >&2
+    fi
+}
+
 echo "=== GitOps Failure Lab - Deployment ==="
 echo ""
 
@@ -374,6 +395,7 @@ if [[ "$OS" == "Darwin" ]]; then
             echo "  Starting isolated Colima profile ${COLIMA_PROFILE}..."
             colima start --profile "$COLIMA_PROFILE" --activate=false \
                 --vm-type "$COLIMA_VM_TYPE" --kubernetes --runtime containerd \
+                --kubernetes-version "$LAB_K3S_VERSION" \
                 --cpu 4 --memory 8 --disk 60
             ;;
         *)
@@ -404,6 +426,7 @@ if ! kubectl cluster-info &>/dev/null; then
     echo "  ERROR: Cluster not responding"
     exit 1
 fi
+warn_if_kubernetes_version_differs
 echo ""
 
 if [ "$SKIP_CLEANUP" = true ] && kubectl -n applications get pvc postgresql-pvc &>/dev/null; then
