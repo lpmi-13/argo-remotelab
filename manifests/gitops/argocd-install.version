@@ -6,3 +6,5 @@ https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.3/manifests/install.yaml
 Local changes:
 - Use the Redis-maintained GHCR image, pinned to Redis 8.2.10 Alpine.
 - Omit Dex resources because this lab uses local Argo CD accounts, not SSO.
+- Set memory requests near steady use and limits well above the peak seen
+  during a full mission run.
