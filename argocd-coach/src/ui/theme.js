@@ -22,6 +22,7 @@
     return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   }
 
+  /** @param {HTMLElement} host */
   function followTheme(host) {
     const update = () => {
       host.dataset.theme = effectiveTheme();

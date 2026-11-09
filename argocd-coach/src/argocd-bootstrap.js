@@ -49,15 +49,18 @@
       });
   }
 
+  /** @param {'network' | 'url'} kind @param {CoachNetworkDetail | {href: string}} details */
   function send(kind, details) {
     dispatchEvent(new CustomEvent('argo-coach:' + kind, {detail: details}));
   }
 
+  /** @param {string} method @param {RequestInfo | URL} input @param {unknown} [body] */
   function observeRequest(method, input, body) {
     let url;
     try { url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url, location.href); }
     catch (_) { return; }
     if (url.origin !== location.origin || !url.pathname.includes('/api/v1/')) return;
+    /** @type {CoachNetworkDetail} */
     const detail = {method: String(method || 'GET').toUpperCase(), path: url.pathname, search: url.search};
     // Sync options are safe to observe; manifests, credentials and arbitrary
     // request bodies are deliberately ignored.
@@ -74,7 +77,8 @@
   const originalFetch = window.fetch;
   if (originalFetch) {
     window.fetch = function (input, init) {
-      observeRequest(init?.method || input?.method || 'GET', input, init?.body);
+      // input may be a URL string, a URL or a Request; only a Request has a method.
+      observeRequest(init?.method || /** @type {Partial<Request>} */ (input)?.method || 'GET', input, init?.body);
       return originalFetch.apply(this, arguments);
     };
   }
@@ -92,10 +96,12 @@
 
   if (window.EventSource) {
     const OriginalEventSource = window.EventSource;
-    window.EventSource = function (url, options) {
+    // `new` on a function that returns an object yields that object, so this
+    // plain function stands in for the EventSource constructor.
+    window.EventSource = /** @type {typeof EventSource} */ (/** @type {unknown} */ (function (url, options) {
       observeRequest('GET', url);
       return new OriginalEventSource(url, options);
-    };
+    }));
     window.EventSource.prototype = OriginalEventSource.prototype;
   }
 

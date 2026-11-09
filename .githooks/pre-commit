@@ -1,0 +1,12 @@
+#!/bin/sh
+# Type-check the coach scripts (tsc --noEmit) and the learning-service session
+# view contract before each commit. `npm ci` in argocd-coach/ installs tsc and
+# enables this hook (its prepare script sets core.hooksPath to .githooks).
+# Skip once with `git commit --no-verify`.
+set -e
+cd "$(git rev-parse --show-toplevel)/argocd-coach"
+if [ ! -x node_modules/.bin/tsc ]; then
+  echo "pre-commit: TypeScript is not installed; run: npm ci --prefix argocd-coach" >&2
+  exit 1
+fi
+npm run --silent check

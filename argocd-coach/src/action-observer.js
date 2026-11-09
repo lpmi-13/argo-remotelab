@@ -16,11 +16,15 @@
   }
 
   class ArgoActionObserver {
+    /** @param {CoachActionEmitter} emit */
     constructor(emit) {
       this.emit = emit;
       this.seen = new Set();
+      /** @type {Record<string, string[]>} target -> selectors (selectors/argocd-3.5.json) */
       this.registry = {};
+      /** @param {WindowEventMap['argo-coach:url']} event */
       this.urlListener = event => this.fromURL(event.detail.href);
+      /** @param {WindowEventMap['argo-coach:network']} event */
       this.networkListener = event => this.fromNetwork(event.detail);
       addEventListener('argo-coach:url', this.urlListener);
       addEventListener('argo-coach:network', this.networkListener);
@@ -43,6 +47,7 @@
       clearTimeout(this.scanTimer);
     }
 
+    /** @param {string} target @param {string} [application] */
     visit(target, application) {
       if (!targets.has(target)) return;
       const key = `${target}:${application || ''}:${location.pathname}:${location.search}`;
@@ -55,6 +60,7 @@
       if (semantic) this.emit(semantic, {application});
     }
 
+    /** @param {string} href */
     fromURL(href) {
       const url = new URL(href);
       const path = url.pathname;
@@ -89,6 +95,7 @@
       if (selected && tab === 'diff') this.visit('app.diff', application);
     }
 
+    /** @param {CoachNetworkDetail} detail */
     fromNetwork(detail) {
       const path = detail.path || '';
       const application = appFromPath(path);

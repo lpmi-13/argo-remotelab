@@ -105,7 +105,7 @@ The controller also retains its older autonomous scenario loop when started with
 | `argocd-apps/`, `sample-django-app/` | Staging and production Applications, projects, platform apps, and Helm chart source. |
 | `scenario-controller/` | Go run API, baseline reset, injectors, readiness and outcome probes. |
 | `learning/`, `learning-service/` | Scenario packs, evidence targets, sessions, checks, scoring, notes, webhook intake. |
-| `argocd-coach/` | Same-origin bootstrap, Argo action observer, Guided clock, Shadow DOM coach. |
+| `argocd-coach/` | Same-origin bootstrap, Argo action observer, Guided clock, Shadow DOM coach. `types/` holds the session view contract the coach is type-checked against. |
 | `lab-gateway/`, `lab-launcher/`, `lab-terminal/` | Nginx gateway, curriculum entry page, browser terminal. |
 | `scripts/`, `playground/iximiuz/` | Local and preloaded VM deployment paths. |
 
@@ -161,6 +161,7 @@ cd ..
 python3 -m unittest discover -s learning-service -p 'test*.py' -v
 python3 -m unittest discover -s tests -p 'test*.py' -v
 node --test argocd-coach/test/*.test.mjs
+npm ci --prefix argocd-coach && npm run --prefix argocd-coach check
 bash -n scripts/*.sh lab-terminal/*.sh
 # With the dedicated local lab running:
 python3 tests/live_reset_soak.py --context colima-argo-remotelab
@@ -171,6 +172,8 @@ KUBE_CONTEXT=colima-argo-remotelab npm run guided
 KUBE_CONTEXT=colima-argo-remotelab npm run demo
 DEMO_ONLY_SCENARIO=missing-configmap KUBE_CONTEXT=colima-argo-remotelab npm run demo
 ```
+
+The coach scripts stay plain JavaScript; the gateway serves `argocd-coach/src` unchanged. `npm run check` type-checks them with `tsc --noEmit` (JSDoc and `argocd-coach/types/`), then generates real session views from `learning-service/session_view_samples.py` for every scenario, mode and run phase, and checks them strictly against `argocd-coach/types/session-view.d.ts`. A server change to the session view therefore fails until the types change, and the coach type check then lists each use that must follow. `npm ci` in `argocd-coach/` also sets `core.hooksPath` to `.githooks`, whose `pre-commit` hook runs the same check (skip once with `git commit --no-verify`).
 
 The live scripts reset the shared lab and must run one at a time. `scenario-recorder` checks the real Argo 3.5.3 list and History UI, Guided orientation, light and dark theme following, and versioned coach-panel image baselines. Its `guided` run follows a failure from Argo evidence through a docked-terminal Git push and back to History and debrief. Its `demo` run checks the default mode, replacement of a closed-tab run, the visible cursor and click cue, and automatic orientation completion; `DEMO_ONLY_SCENARIO` checks a full reference repair, including the Gitea source and commit views for `missing-configmap`. After the full Argo CD 3.5.3 upgrade, review the captured panels and run with `UPDATE_BASELINES=1` to create its new visual baselines. The mode matrix uses the controller's reference fix as a fixture for Guided and Challenge; the separate terminal test exercises a learner Git push. See the verification findings for current live results and remaining gates.
 

@@ -5,6 +5,7 @@
     addEventListener('argo-coach:auth-failed', initialize, {once: true});
     return;
   }
+  /** @type {CoachHandoff | null} */
   const config = JSON.parse(sessionStorage.getItem('argo-coach:handoff') || 'null');
   if (!config?.session || !config?.token) return;
   const service = '/coach/learning';
@@ -22,6 +23,7 @@
   const demoPausedKey = `argo-coach:demo-paused:${config.session}`;
   const debriefDismissedKey = `argo-coach:debrief-dismissed:${config.session}`;
   let sequence = Number(sessionStorage.getItem(seqKey) || 0);
+  /** @type {SessionView | null} */
   let view = JSON.parse(sessionStorage.getItem(initialViewKey) || 'null');
   if (view?.session_id !== config.session) view = null;
   let message = '';
@@ -36,6 +38,7 @@
   let debriefDismissed = sessionStorage.getItem(debriefDismissedKey) === 'true';
   let collapsed = sessionStorage.getItem(collapsedKey) === 'true';
   const savedPosition = JSON.parse(sessionStorage.getItem(positionKey) || 'null');
+  /** @type {{x: number, y: number} | null} */
   let panelPosition = savedPosition && Number.isFinite(savedPosition.x) && Number.isFinite(savedPosition.y)
     ? savedPosition : null;
   let nativeOverlayOpen = false;
@@ -60,10 +63,15 @@
   let briefTimer = null;
   let briefTicker = null;
   let pointerTimer = null;
+  /** @type {DemoPatch | null} */
   let demoPatch = JSON.parse(sessionStorage.getItem(demoPatchKey) || 'null');
+  /** @type {DemoGitStep | null} */
   let demoGit = JSON.parse(sessionStorage.getItem(demoGitKey) || 'null');
+  /** @type {DemoNarration | null} */
   let demoNarration = JSON.parse(sessionStorage.getItem(demoNarrationKey) || 'null');
+  /** @type {DemoAttempts | null} */
   let demoAttempts = JSON.parse(sessionStorage.getItem(demoAttemptsKey) || 'null');
+  /** @type {{answer: string, explanation: string} | null} */
   let recentLearning = null;
   let evidenceMapOpen = false;
   let demoPatchOpen = false;
@@ -72,6 +80,7 @@
   let checkInOpen = false;
   let guidedLocationTasks = 0;
   let sending = Promise.resolve();
+  /** @type {WebSocket | null} */
   let stream = null;
   let lastStreamMessage = 0;
   let pollTimer = null;
@@ -100,8 +109,10 @@
 
   const escape = value => String(value ?? '').replace(/[&<>"']/g, char =>
     ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
+  /** @param {number} ms @returns {Promise<void>} */
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const ready = () => ['READY', 'INVESTIGATING', 'FIXED'].includes(view?.state);
+  /** @param {string} [commit] */
   const gitCommitURL = commit => /^[0-9a-f]{40}$/.test(commit || '')
     ? `/gitea/remotelab/django-app/commit/${commit}` : null;
   function gitSourceURL() {
@@ -110,6 +121,7 @@
     if (!/^chart\/django-app(?:-staging)?\/templates\/deployment\.yaml$/.test(path)) return null;
     return `/gitea/remotelab/django-app/src/commit/${view.trigger_revision}/${path}`;
   }
+  /** @param {DemoGitStep | null} next */
   function saveDemoGit(next) {
     demoGit = next;
     if (next) sessionStorage.setItem(demoGitKey, JSON.stringify(next));
@@ -170,6 +182,7 @@
     replayError = '';
     render();
     try {
+      /** @type {RunCreatedResponse} */
       const result = await request('/api/runs', {method: 'POST', body: JSON.stringify({
         scenario: view.scenario.id, mode: view.mode, environment: view.environment, replace_existing: true,
       })});
@@ -192,6 +205,13 @@
     }
   }
 
+  /**
+   * Calls the learning service with the session token. The JSON is untyped;
+   * callers declare the response type they expect.
+   * @param {string} path
+   * @param {RequestInit} [options]
+   * @returns {Promise<any>}
+   */
   async function request(path, options = {}) {
     const response = await fetch(service + path, {
       ...options,
@@ -204,6 +224,7 @@
     return data;
   }
 
+  /** @param {string} value @param {boolean} [isError] */
   function say(value, isError = false) {
     if (redirecting) return;
     message = value;
@@ -211,6 +232,7 @@
     render();
   }
 
+  /** @type {(type: string, details?: Record<string, any>) => Promise<void>} */
   function sendAction(type, details = {}) {
     // The run is scored. Exploring after the debrief must not add evidence or
     // coaching messages to a finished mission.
@@ -220,6 +242,7 @@
     const action = {protocol_version: 2, sequence, type, actor: view?.mode === 'demonstration' ? 'tutorial' : 'learner',
       observed_at: new Date().toISOString(), details};
     sending = sending.catch(() => {}).then(async () => {
+      /** @type {ActionResponse} */
       const result = await request(sessionPath + '/actions', {method: 'POST', body: JSON.stringify(action)});
       if (result.evaluation?.message) {
         message = result.evaluation.message;
@@ -269,6 +292,7 @@
     attributes: true, attributeFilter: ['class', 'style', 'aria-hidden']});
   updateNativeOverlay();
 
+  /** @param {SessionView} nextView @param {boolean} [preserveMessage] */
   function applyView(nextView, preserveMessage = false) {
     // HTTP and WebSocket responses can finish out of order during preparation.
     if (view?.run_updated_at && nextView.run_updated_at &&
@@ -311,8 +335,10 @@
     progress.querySelector('[data-brief-label]').textContent = waiting
       ? 'Preparing the lab. The countdown starts when it is ready.'
       : demoPaused ? 'Demonstration paused. Time remaining:' : 'Demonstration starts automatically in';
-    progress.querySelector('[data-brief-seconds]').hidden = waiting;
-    progress.querySelector('[data-brief-seconds]').textContent = `${Math.ceil(remaining / 1000)}s`;
+    /** @type {HTMLElement} */
+    const seconds = progress.querySelector('[data-brief-seconds]');
+    seconds.hidden = waiting;
+    seconds.textContent = `${Math.ceil(remaining / 1000)}s`;
     progress.querySelector('[data-brief-fill]').style.width = `${100 * (1 - remaining / briefDuration)}%`;
     const bar = progress.querySelector('[role="progressbar"]');
     if (waiting) {
@@ -362,6 +388,7 @@
   }
 
   function updateDemoCountdown() {
+    /** @type {HTMLElement} */
     const timer = root.querySelector('[data-demo-timer]');
     if (!timer) return;
     timer.hidden = !demoCountdown;
@@ -371,7 +398,7 @@
     timer.querySelector('[data-demo-label]').textContent = demoPaused ? 'Paused · next action in' : 'Next action in';
     timer.querySelector('[data-demo-seconds]').textContent = (remaining / 1000).toFixed(1);
     timer.querySelector('[data-demo-fill]').style.width = `${100 * (1 - remaining / demoCountdown.duration)}%`;
-    timer.querySelector('[data-action="advance"]').disabled = demoPaused;
+    /** @type {HTMLButtonElement} */ (timer.querySelector('[data-action="advance"]')).disabled = demoPaused;
   }
 
   function pauseDemoDelay() {
@@ -393,6 +420,7 @@
     updateDemoCountdown();
   }
 
+  /** @param {boolean} paused */
   function setDemoPaused(paused) {
     if (demoPaused === paused) return;
     demoPaused = paused;
@@ -409,12 +437,14 @@
     }
   }
 
+  /** @param {number} duration */
   function startDemoCountdown(duration) {
     clearInterval(demoCountdownTicker);
     demoCountdown = {duration, remaining: duration, deadline: null};
     updateDemoCountdown();
   }
 
+  /** @param {() => void} onComplete @param {number} [duration] */
   function startDemoDelay(onComplete, duration = demoAdvanceDelay) {
     startDemoCountdown(duration);
     if (restoreAdvanceFocus) root.querySelector('#demo-advance')?.focus();
@@ -434,6 +464,7 @@
     resumeDemoDelay();
   }
 
+  /** @param {number} [duration] @returns {Promise<void>} */
   function demoWait(duration = demoAdvanceDelay) {
     return new Promise(resolve => {
       demoWaitResolve = resolve;
@@ -501,6 +532,7 @@
     socket.onerror = () => socket.close();
   }
 
+  /** @param {string} id @param {DemoNarration['phase']} phase */
   function setDemoNarration(id, phase) {
     demoNarration = {id, phase};
     sessionStorage.setItem(demoNarrationKey, JSON.stringify(demoNarration));
@@ -508,6 +540,7 @@
     render();
   }
 
+  /** @param {NextCheck} check @param {string} detail @param {string} [reason] */
   function narrateClick(check, detail, reason) {
     if (view?.mode !== 'demonstration') return;
     demoNarration = {id: check.id, phase: 'doing', detail, detailReason: reason || check.demo?.why};
@@ -515,6 +548,7 @@
     render();
   }
 
+  /** @param {string} what @param {string} why @param {string} [label] */
   function demoExplanation(what, why, label = 'Doing') {
     return `<div class="demo-explanation">
       <div><span>${label}</span><p>${escape(what)}</p></div>
@@ -625,11 +659,13 @@
       : !feedback.fixed ? 'The deployment still needs repair.' : feedback.durable
         ? 'The deployment recovered and the repair is in the deployed Git revision.'
         : 'The deployment recovered, but the repair is not in the deployed Git revision.';
+    /** @type {[string, keyof ScoreBreakdown, number][]} */
     const scoreParts = [
       ['Remediation', 'remediation', 35], ['Console evidence', 'console_evidence', 25],
       ['Diagnosis', 'diagnosis', 20], ['Operating practice', 'operational_practice', 10],
       ['Efficiency', 'efficiency', 10],
     ];
+    /** @type {Partial<Truth>} */
     const reference = feedback.truth || {};
     const referenceParts = [['Cause', reference.cause], ['Evidence', reference.evidence], ['Repair', reference.fix]]
       .filter(([, value]) => value);
@@ -663,6 +699,7 @@
       ${replayError ? `<p class="message error" role="alert">${escape(replayError)}</p>` : ''}</div>`;
   }
 
+  /** @param {string} sourceActions */
   function completedSummary(sourceActions) {
     const feedback = view.feedback;
     return `<p class="step-eyebrow">Mission complete${feedback.total == null ? '' : ` · ${escape(feedback.total)} / 100`}</p>
@@ -721,6 +758,7 @@
     </div></div>`;
   }
 
+  /** @param {Element} panel @param {number} x @param {number} y @param {boolean} [save] */
   function positionCoach(panel, x, y, save = false) {
     const bounds = panel.getBoundingClientRect();
     const margin = 8;
@@ -751,8 +789,12 @@
       collapsed = true;
       autoCollapsed = true;
     }
-    if (root.querySelector('.evidence-map')) evidenceMapOpen = root.querySelector('.evidence-map').open;
-    if (root.querySelector('.demo-patch')) demoPatchOpen = root.querySelector('.demo-patch').open;
+    /** @type {HTMLDetailsElement} */
+    const evidenceMap = root.querySelector('.evidence-map');
+    if (evidenceMap) evidenceMapOpen = evidenceMap.open;
+    /** @type {HTMLDetailsElement} */
+    const patchDetails = root.querySelector('.demo-patch');
+    if (patchDetails) demoPatchOpen = patchDetails.open;
     host.toggleAttribute('data-native-overlay', nativeOverlayOpen && view.mode === 'demonstration');
     if (view.mode === 'demonstration' && !view.feedback && (demoPatch?.diff ||
         (!view.next_check && view.scenario.level !== 1))) {
@@ -810,7 +852,9 @@
              <button class="secondary" data-action="show-location">Show me</button>
              ${view.fixed && view.scenario.level !== 1 && !view.feedback ? '<button class="primary" data-action="note">Write incident note</button>' : ''}</div>`}
          ${showGitSource || showTerminal ? `<div class="actions">${sourceActions}</div>` : ''}`;
-    const previousValues = new Map(Array.from(root.querySelectorAll('input, textarea')).map(element => [element.id, element.value]));
+    /** @type {NodeListOf<HTMLInputElement | HTMLTextAreaElement>} */
+    const fields = root.querySelectorAll('input, textarea');
+    const previousValues = new Map(Array.from(fields).map(element => [element.id, element.value]));
     const active = shadow.activeElement?.id;
     const stepId = demoStepId();
     const doing = !exploring && view.mode === 'demonstration' && demoNarration?.id === stepId && demoNarration?.phase === 'doing';
@@ -825,6 +869,7 @@
     </aside>${noteOpen ? noteForm() : ''}`;
     if (panelPosition) positionCoach(root.querySelector('.panel'), panelPosition.x, panelPosition.y);
     for (const [id, value] of previousValues) {
+      /** @type {HTMLInputElement | HTMLTextAreaElement} */
       const element = root.querySelector(`#${id}`);
       if (element) element.value = value;
     }
@@ -871,6 +916,7 @@
         .some(value => (value || '').trim().toLowerCase().includes(phrase)));
   }
 
+  /** @param {string} label @param {ParentNode} [scope] */
   function exactControl(label, scope = document) {
     const matches = element => [element.textContent, element.getAttribute('aria-label'), element.getAttribute('title')]
       .some(value => (value || '').trim().toLowerCase() === label.toLowerCase());
@@ -896,6 +942,7 @@
     return false;
   }
 
+  /** @param {NextCheck} check */
   function resourceEvidenceReady(check) {
     const drawer = resourceScope();
     if (drawer === document) return false;
@@ -912,6 +959,7 @@
       tab === label.toLowerCase() || (check.target === 'resource.summary' && !tab);
   }
 
+  /** @param {NextCheck} check @param {string} action */
   function stopDemoAt(check, action) {
     demoStopped = true;
     cancelDemoDelay();
@@ -919,6 +967,7 @@
     return false;
   }
 
+  /** @param {NextCheck} check */
   function countDemoLocationAttempt(check) {
     const id = `${view.scenario.id}:${check.id}`;
     demoAttempts = {id, count: demoAttempts?.id === id ? demoAttempts.count + 1 : 1};
@@ -931,12 +980,14 @@
     sessionStorage.removeItem(demoAttemptsKey);
   }
 
+  /** @param {NextCheck} check */
   function markDemoTarget(check) {
     if (view?.mode !== 'demonstration' || check.available) return;
     if (typeof observer.visit === 'function') observer.visit(check.target, view.application);
     else sendAction('target_visited', {target: check.target, application: view.application});
   }
 
+  /** @type {Partial<Record<TargetId, string>>} */
   const demoContent = {
     'app.history': '.application-deployment-history',
     'app.conditions': '.application-conditions',
@@ -945,6 +996,7 @@
     'app.tree': '.application-resource-tree__node-title',
   };
 
+  /** @param {TargetId} target */
   async function waitForDemoContent(target) {
     const selector = demoContent[target];
     for (let attempt = 0; attempt < 20 && !demoStopped; attempt += 1) {
@@ -954,6 +1006,7 @@
     return false;
   }
 
+  /** @param {NextCheck} check */
   function demoNeedsLocation(check) {
     if (!check.available || check.target.startsWith('resource.')) return true;
     if (check.target === 'settings.repos') return !/\/argocd\/settings\/repos(?:itories)?\/?$/.test(location.pathname);
@@ -968,6 +1021,7 @@
     return false;
   }
 
+  /** @param {NextCheck} check @param {boolean} demonstration */
   async function indicateEvidence(check, demonstration) {
     if (demonstration) markDemoTarget(check);
     else {
@@ -1052,8 +1106,9 @@
         continue;
       }
       const duration = Math.min(1100, Math.max(450, 420 + distance * .24));
-      await new Promise(resolve => {
+      await /** @type {Promise<void>} */ (new Promise(resolve => {
         const started = performance.now();
+        /** @param {number} now */
         const frameStep = now => {
           if (!element.isConnected || demoStopped) { resolve(); return; }
           const progress = Math.min(1, (now - started) / duration);
@@ -1064,7 +1119,7 @@
           else resolve();
         };
         requestAnimationFrame(frameStep);
-      });
+      }));
     }
     await new Promise(resolve => requestAnimationFrame(resolve));
     return element.isConnected && !demoStopped;
@@ -1108,6 +1163,7 @@
     });
   }
 
+  /** @param {NextCheck} check */
   function evidenceElement(check) {
     const exact = text => Array.from(document.querySelectorAll('body *')).find(element =>
       element.childElementCount === 0 && element.textContent?.trim() === text && visible(element));
@@ -1162,6 +1218,7 @@
     return true;
   }
 
+  /** @returns {Promise<ArgoResourceNode[]>} */
   async function resourceTreeNodes() {
     const token = localStorage.getItem('argocd.token');
     const response = await fetch(`/argocd/api/v1/applications/${encodeURIComponent(view.application)}/resource-tree?appNamespace=argocd`,
@@ -1183,6 +1240,7 @@
     };
   }
 
+  /** @param {TargetId} target */
   async function resourceNode(target) {
     const nodes = await resourceTreeNodes();
     const kind = target === 'resource.events' && view.scenario.id === 'stale-job' ? 'Job' :
@@ -1193,12 +1251,14 @@
       name: node.name, kind: node.kind} : null;
   }
 
+  /** @param {boolean} [demonstration] */
   async function showLocation(demonstration = false) {
     if (!demonstration) guidedLocationTasks += 1;
     try { return await showLocationImpl(demonstration); }
     finally { if (!demonstration) guidedLocationTasks -= 1; }
   }
 
+  /** @param {boolean} demonstration */
   async function showLocationImpl(demonstration) {
     const check = view?.next_check;
     if (!check) { say('Open the affected Application and verify its health and deployed revision.'); return; }
@@ -1329,6 +1389,7 @@
         const operationPanel = Array.from(document.querySelectorAll('.sliding-panel--opened'))
           .find(panel => visible(panel) && panel.querySelector('.application-operation-state__icons_container_padding'));
         if (operationPanel) {
+          /** @type {HTMLElement} */
           const close = operationPanel.querySelector('.sliding-panel__close');
           if (close) {
             narrateClick(check, 'Close Sync Status to inspect the resource in the tree.');
@@ -1415,6 +1476,10 @@
           destination.searchParams.set('node', node.id);
           destination.searchParams.set('tab', ({'resource.events': 'events', 'resource.logs': 'logs',
             'resource.manifest': 'summary', 'resource.summary': 'summary'})[target]);
+          // With no drawer mounted, resourceScope() returns document, which has
+          // no matches(). The TypeError lands in the catch below, which points at
+          // the tab label instead of stopping the demonstration.
+          // @ts-expect-error -- known behavior, kept until it is changed deliberately
           if (destination.href !== location.href && resourceScope().matches('.sliding-panel--opened')) {
             // A resource can remount while a hook retries. The URL lets Argo
             // reopen the selected tab on the next mount.
@@ -1440,6 +1505,7 @@
     else say(check.hint || `Open ${check.where} in the Argo CD console.`);
   }
 
+  /** @param {string} answer */
   async function answerCheck(answer) {
     const check = view?.next_check;
     if (!check) return;
@@ -1448,8 +1514,10 @@
     await refresh();
   }
 
+  /** @param {IncidentNote} values */
   async function submitNote(values) {
     try {
+      /** @type {Feedback} */
       const feedback = await request(sessionPath + '/note', {method: 'POST', body: JSON.stringify(values)});
       noteOpen = false;
       view.feedback = feedback;
@@ -1459,6 +1527,7 @@
     } catch (reason) { say(reason.message, true); }
   }
 
+  /** @param {NextCheck} check */
   async function showDemoFinding(check) {
     clearDemoLocationAttempts();
     const needsLook = Boolean(check.demo?.look);
@@ -1506,11 +1575,13 @@
       element.textContent?.trim() === path && visible(element));
   }
 
+  /** @param {string} path */
   function navigateDemo(path) {
     demoNavigating = true;
     location.href = path;
   }
 
+  /** @param {string} fixStep */
   async function performDemoFix(fixStep) {
     const writesGit = ['git', 'argo-and-git', 'terminal'].includes(view.fix_surface);
     const previousGit = demoGit;
@@ -1518,6 +1589,7 @@
     demoFixStarted = true;
     sessionStorage.setItem(demoFixKey, 'true');
     setDemoNarration(fixStep, 'doing');
+    /** @type {DemonstrateFixResponse} */
     let result;
     try { result = await request(sessionPath + '/demonstrate-fix', {method: 'POST', body: '{}'}); }
     catch (reason) {
@@ -1616,6 +1688,7 @@
         say('Writing the incident note.');
         await demoWait();
         if (demoStopped) return;
+        /** @type {Partial<DemonstrationNote>} */
         const note = view.demonstration_note || {};
         await submitNote({resource: note.resource || view.application, evidence: note.evidence || 'Healthy and Synced',
           revision: note.revision || view.revision, cause: note.cause || 'No incident', fix: note.fix || 'No fix needed'});
@@ -1633,8 +1706,12 @@
     }
   }
 
+  // Listeners on root and dockRoot only see events from the coach's own markup.
+  /** @param {Event} event */
+  const eventElement = event => /** @type {Element} */ (event.target);
+
   root.addEventListener('click', event => {
-    const action = event.target.closest('[data-action]')?.dataset.action;
+    const action = eventElement(event).closest('[data-action]')?.dataset.action;
     if (!action) return;
     if (action === 'retry-session') refresh();
     else if (action === 'replay') replayMission();
@@ -1704,7 +1781,7 @@
     }
   });
   root.addEventListener('pointerdown', event => {
-    const handle = event.target.closest('.coach-drag-handle');
+    const handle = eventElement(event).closest('.coach-drag-handle');
     if (!handle || event.button !== 0 || !event.isPrimary) return;
     const panel = handle.closest('.panel');
     const start = panel.getBoundingClientRect();
@@ -1734,17 +1811,17 @@
     handle.addEventListener('lostpointercapture', finish);
   });
   dockRoot.addEventListener('click', event => {
-    if (event.target.closest('[data-action="close-terminal"]')) {
+    if (eventElement(event).closest('[data-action="close-terminal"]')) {
       terminalOpen = false;
       terminalMinimized = false;
       renderDock(); render();
-    } else if (event.target.closest('[data-action="minimize-terminal"]')) {
+    } else if (eventElement(event).closest('[data-action="minimize-terminal"]')) {
       terminalMinimized = !terminalMinimized;
       renderDock(); render();
     }
   });
   dockRoot.addEventListener('pointerdown', event => {
-    const handle = event.target.closest('.terminal-resize');
+    const handle = eventElement(event).closest('.terminal-resize');
     if (!handle || terminalMinimized) return;
     const dock = dockRoot.querySelector('.terminal-dock');
     const start = dock.getBoundingClientRect();
@@ -1764,7 +1841,7 @@
     handle.addEventListener('pointercancel', finish);
   });
   dockRoot.addEventListener('keydown', event => {
-    if (!event.target.matches('.terminal-resize')) return;
+    if (!eventElement(event).matches('.terminal-resize')) return;
     const steps = {ArrowLeft: [20, 0], ArrowRight: [-20, 0], ArrowUp: [0, 20], ArrowDown: [0, -20]};
     const step = steps[event.key];
     if (!step) return;
@@ -1774,11 +1851,16 @@
   });
   root.addEventListener('submit', event => {
     event.preventDefault();
-    if (event.target.id === 'check-form') answerCheck(root.querySelector('#check-answer')?.value || '');
-    else if (event.target.id === 'note-form') submitNote(Object.fromEntries(new FormData(event.target)));
+    const form = /** @type {HTMLFormElement} */ (event.target);
+    if (form.id === 'check-form') {
+      answerCheck(/** @type {HTMLInputElement} */ (root.querySelector('#check-answer'))?.value || '');
+    } else if (form.id === 'note-form') {
+      // noteForm() renders one textarea for each IncidentNote field.
+      submitNote(/** @type {IncidentNote} */ (/** @type {unknown} */ (Object.fromEntries(new FormData(form)))));
+    }
   });
   root.addEventListener('keydown', event => {
-    if (event.target.matches('.coach-drag-handle')) {
+    if (eventElement(event).matches('.coach-drag-handle')) {
       const step = {ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1]}[event.key];
       if (step) {
         event.preventDefault();

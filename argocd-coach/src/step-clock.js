@@ -1,15 +1,38 @@
 // Guided time is active time on the current goal. Hidden tabs, briefing and
 // note forms pause it. A check-in waits for a quiet moment and never penalizes
 // the learner for continuing.
+
+/**
+ * @typedef {object} StepClockOptions
+ * @property {() => boolean} [isPaused] True while active time must not count.
+ * @property {() => boolean} [isQuiet] True when a check-in would not interrupt typing.
+ * @property {(stepId: string) => void} [onDue]
+ * @property {() => number} [now]
+ * @property {(callback: () => void, delay: number) => unknown} [setTimer]
+ * @property {(id: unknown) => void} [clearTimer]
+ * @property {number} [tickMs]
+ * @property {number} [idleMs]
+ */
+
 class GuidedStepClock {
+  /** @param {StepClockOptions} [options] */
   constructor({isPaused = () => false, isQuiet = () => true, onDue = () => {},
     now = () => performance.now(), setTimer = (callback, delay) => setTimeout(callback, delay),
-    clearTimer = id => clearTimeout(id), tickMs = 500, idleMs = 5000} = {}) {
-    Object.assign(this, {isPaused, isQuiet, onDue, now, setTimer, clearTimer, tickMs, idleMs});
+    clearTimer = id => clearTimeout(/** @type {number} */ (id)), tickMs = 500, idleMs = 5000} = {}) {
+    this.isPaused = isPaused;
+    this.isQuiet = isQuiet;
+    this.onDue = onDue;
+    this.now = now;
+    this.setTimer = setTimer;
+    this.clearTimer = clearTimer;
+    this.tickMs = tickMs;
+    this.idleMs = idleMs;
+    /** @type {string | null} */
     this.stepId = null;
     this.timer = null;
     this.active = 0;
   }
+  /** @param {string} stepId @param {number} budgetSeconds */
   start(stepId, budgetSeconds) {
     this.stop();
     this.stepId = stepId;

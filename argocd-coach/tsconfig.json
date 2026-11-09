@@ -1,0 +1,22 @@
+{
+  // Type-check the coach scripts in place. The lab gateway serves src/ as is,
+  // so there is no compile step: tsc only reports errors.
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2023", "dom", "dom.iterable"],
+    "types": [],
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    // The scripts probe Argo CD's DOM, where nearly every lookup may miss.
+    // Null checks stay off so that code does not fill up with casts; the
+    // session view contract is checked strictly in tsconfig.contract.json.
+    "strict": false,
+    "noImplicitThis": true,
+    "strictFunctionTypes": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true
+  },
+  "include": ["src/**/*.js", "types/**/*.d.ts"]
+}

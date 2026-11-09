@@ -1,0 +1,17 @@
+{
+  "name": "argo-remotelab-argocd-coach",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Type checks for the coach scripts the lab gateway serves unchanged.",
+  "scripts": {
+    "prepare": "git -C .. config core.hooksPath .githooks || true",
+    "session-view-samples": "python3 ../learning-service/session_view_samples.py build/session-view-samples.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:contract": "npm run --silent session-view-samples && tsc --noEmit -p tsconfig.contract.json",
+    "check": "npm run --silent typecheck && npm run --silent typecheck:contract",
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}

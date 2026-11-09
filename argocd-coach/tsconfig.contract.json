@@ -1,0 +1,14 @@
+{
+  // Checks real learning-service output against the session view contract.
+  // `npm run typecheck:contract` generates build/session-view-samples.ts first.
+  // Strict null checks matter here: null in the wrong field is a broken contract.
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2023"],
+    "types": [],
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": true
+  },
+  "files": ["types/session-view.d.ts", "build/session-view-samples.ts"]
+}
