@@ -1240,6 +1240,9 @@
     };
   }
 
+  /** Argo's `node` URL parameter for a resource tree node. @param {ArgoResourceNode} node */
+  const resourceNodeId = node => [node.group || '', node.kind, node.namespace || '', node.name].join('/') + '/0';
+
   /** @param {TargetId} target */
   async function resourceNode(target) {
     const nodes = await resourceTreeNodes();
@@ -1247,8 +1250,51 @@
       target === 'resource.events' || target === 'resource.logs' ? 'Pod' : 'Deployment';
     const matching = nodes.filter(node => node.kind === kind);
     const node = matching.find(item => item.health?.status && item.health.status !== 'Healthy') || matching[0];
-    return node ? {id: [node.group || '', node.kind, node.namespace || '', node.name].join('/') + '/0',
-      name: node.name, kind: node.kind} : null;
+    return node ? {id: resourceNodeId(node), name: node.name, kind: node.kind} : null;
+  }
+
+  // Argo opens a resource's drawer in the same render that finds its node in
+  // the resource tree, but renders the drawer's header only after a chain of
+  // API calls. So while the node is in the tree, a missing drawer is still
+  // loading; once a replaced Pod or recreated hook Job has left the tree, its
+  // drawer will never open.
+  const drawerLoadLimit = 30000;
+  const drawerTreeCheckInterval = 2000;
+
+  /**
+   * @param {string} nodeId
+   * @returns {Promise<'open' | 'loading' | 'gone' | 'closed'>} `loading` when Argo
+   *   still lists the resource but has not shown it within the limit; `closed`
+   *   when another resource was selected or the demonstration stopped.
+   */
+  async function waitForResourceDrawer(nodeId) {
+    const started = performance.now();
+    let treeChecked = started;
+    while (!demoStopped) {
+      if (resourceScope() !== document) return 'open';
+      if (new URL(location.href).searchParams.get('node') !== nodeId) return 'closed';
+      const now = performance.now();
+      if (now - treeChecked >= drawerTreeCheckInterval) {
+        if (!(await resourceTreeNodes()).some(node => resourceNodeId(node) === nodeId)) return 'gone';
+        treeChecked = performance.now();
+      }
+      if (now - started >= drawerLoadLimit) return 'loading';
+      await sleep(250);
+    }
+    return 'closed';
+  }
+
+  /**
+   * Argo did not show the resource. A demonstration stops when Argo still lists
+   * the resource but could not load it; otherwise it tries again on its next
+   * step, within its attempt limit. Guided learners get the written hint.
+   * @param {NextCheck} check @param {boolean} demonstration
+   * @param {boolean} failedToLoad @param {string} tabLabel
+   */
+  function resourceDrawerUnavailable(check, demonstration, failedToLoad, tabLabel) {
+    if (!demonstration) say(check.hint || `Open ${check.where} in the Argo CD console.`);
+    else if (failedToLoad) return stopDemoAt(check, tabLabel);
+    return false;
   }
 
   /** @param {boolean} [demonstration] */
@@ -1404,9 +1450,15 @@
              !document.querySelector('.application-resource-tree__node-title'); attempt += 1) {
           await sleep(250);
         }
-        const node = await resourceNode(target);
-        if (node) {
-          const nodeSelected = () => new URL(location.href).searchParams.get('node') === node.id;
+        let node = await resourceNode(target);
+        const nodeSelected = () => new URL(location.href).searchParams.get('node') === node.id;
+        const tabLabel = target === 'resource.manifest' ? 'Desired Manifest' :
+          {'resource.events': 'Events', 'resource.logs': 'Logs', 'resource.summary': 'Summary'}[target];
+        /** @type {'open' | 'loading' | 'gone' | 'closed'} */
+        let drawer = 'gone';
+        // A replaced Pod or recreated hook Job never opens, so select the
+        // resource that replaced it, a few times at most.
+        for (let selection = 0; node && selection < 3; selection += 1) {
           if (!nodeSelected()) {
             // The tree often contains Service/django and Deployment/django.
             // A name-only click can open the wrong resource and loop forever.
@@ -1430,11 +1482,13 @@
             }
             return false;
           }
-          // The node URL updates before Argo mounts its resource drawer.
-          // Wait for the drawer before looking for its Events or Logs tab.
-          for (let attempt = 0; attempt < 40 && resourceScope() === document && !demoStopped; attempt += 1) {
-            await sleep(250);
-          }
+          drawer = await waitForResourceDrawer(node.id);
+          if (drawer !== 'gone') break;
+          node = await resourceNode(target);
+        }
+        if (node) {
+          if (drawer === 'closed') return false;
+          if (drawer !== 'open') return resourceDrawerUnavailable(check, demonstration, drawer === 'loading', tabLabel);
           if (resourceEvidenceReady(check)) return indicateEvidence(check, demonstration);
           if (target === 'resource.manifest') {
             const scope = resourceScope();
@@ -1476,18 +1530,16 @@
           destination.searchParams.set('node', node.id);
           destination.searchParams.set('tab', ({'resource.events': 'events', 'resource.logs': 'logs',
             'resource.manifest': 'summary', 'resource.summary': 'summary'})[target]);
-          // With no drawer mounted, resourceScope() returns document, which has
-          // no matches(). The TypeError lands in the catch below, which points at
-          // the tab label instead of stopping the demonstration.
-          // @ts-expect-error -- known behavior, kept until it is changed deliberately
-          if (destination.href !== location.href && resourceScope().matches('.sliding-panel--opened')) {
+          const drawerScope = resourceScope();
+          // The drawer closed while its tab was opening: the resource was replaced.
+          if (!(drawerScope instanceof Element)) return resourceDrawerUnavailable(check, demonstration, false, tabLabel);
+          if (destination.href !== location.href && drawerScope.matches('.sliding-panel--opened')) {
             // A resource can remount while a hook retries. The URL lets Argo
             // reopen the selected tab on the next mount.
             location.href = destination.href;
             return false;
           }
-          if (demonstration) return stopDemoAt(check, target === 'resource.manifest' ? 'Desired Manifest' :
-            {'resource.events': 'Events', 'resource.logs': 'Logs', 'resource.summary': 'Summary'}[target]);
+          if (demonstration) return stopDemoAt(check, tabLabel);
           return false;
         }
       } catch (_) { /* Keep the on-screen pointer when the tree is unavailable. */ }

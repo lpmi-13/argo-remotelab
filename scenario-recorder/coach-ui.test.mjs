@@ -398,6 +398,98 @@ test('demo stops after one ineffective Desired Manifest click', {timeout: 15000}
   } finally { await browser.close(); }
 });
 
+const podEventsCheck = {id: 'pod-events', target: 'resource.events', where: 'Resource events tab',
+  action: 'Read the failing Pod events.', reason: 'Events name the missing ConfigMap.',
+  hint: 'Open the failing Pod and read its Events.', question: 'Which ConfigMap is missing?',
+  demo: {what: 'Open the failing Pod → Events.', why: 'Events name the missing ConfigMap.'},
+  demonstration_answer: 'django-app-missing-config', available: false};
+const failingPod = name => ({group: '', kind: 'Pod', namespace: 'applications', name, health: {status: 'Degraded'}});
+const podURL = name => `http://lab.test/argocd/applications/argocd/shop-web-prod?view=tree&node=${encodeURIComponent(`/Pod/applications/${name}/0`)}&tab=events`;
+
+test('demo selects the replacement when the selected Pod is replaced', {timeout: 30000}, async () => {
+  const fixturePage = await fixture('demonstration');
+  const {browser, page, actions} = fixturePage;
+  fixturePage.setView({...session('demonstration'), fixed: false, checks_total: 2,
+    scenario: {id: 'missing-configmap', title: 'Find the failing Pod', level: 2}, next_check: podEventsCheck});
+  let treeRequests = 0;
+  await page.route('**/*', route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/argocd/applications/argocd/shop-web-prod') {
+      // Argo lists only the replacement Pod and keeps the drawer closed for the old one.
+      return route.fulfill({contentType: 'text/html', body: `<!doctype html><html><body>
+        <script>window.replacementClicks = 0;</script>
+        <div class="application-resource-tree__node-title" onclick="replacementClicks++;
+          history.replaceState(null, '', '?view=tree&node=%2FPod%2Fapplications%2Fdjango-6db695b9cf-bbbbb%2F0&tab=events');
+          document.querySelector('#drawer').hidden = false">django-6db695b9cf-bbbbb</div>
+        <div id="drawer" class="sliding-panel sliding-panel--opened" hidden>
+          <div class="resource-details__header">Pod django-6db695b9cf-bbbbb</div>
+          <button role="tab" class="tabs__tab--selected">Events</button>
+          <p>configmap "django-app-missing-config" not found</p>
+        </div><script src="/coach/assets/coach.js"></script></body></html>`});
+    }
+    if (url.pathname === '/argocd/api/v1/applications/shop-web-prod/resource-tree') {
+      // The first lookup finds the Pod named in the URL; by the next, it has been replaced.
+      treeRequests += 1;
+      return route.fulfill({json: {nodes: [failingPod(treeRequests === 1 ?
+        'django-6db695b9cf-aaaaa' : 'django-6db695b9cf-bbbbb')]}});
+    }
+    return route.fallback();
+  });
+  try {
+    await page.goto(podURL('django-6db695b9cf-aaaaa'));
+    await page.clock.install();
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    await page.locator('#argocd-coach-host [data-action="advance"]').click();
+    const shown = () => actions.some(action => action.type === 'target_visited' &&
+      action.details.target === 'resource.events');
+    for (let attempt = 0; attempt < 40 && !shown(); attempt += 1) await page.clock.runFor(500);
+    assert.ok(shown(), 'the replacement Pod events were shown');
+    assert.equal(await page.evaluate(() => window.replacementClicks), 1);
+    assert.equal(new URL(page.url()).searchParams.get('node'), '/Pod/applications/django-6db695b9cf-bbbbb/0');
+    assert.equal(await page.locator('#argocd-coach-host [role="status"]')
+      .filter({hasText: /could not open/}).count(), 0);
+  } finally { await browser.close(); }
+});
+
+for (const mode of ['demonstration', 'guided']) {
+  test(`${mode} gives up when Argo never fills in a resource it still lists`, {timeout: 30000}, async () => {
+    const fixturePage = await fixture(mode);
+    const {browser, page} = fixturePage;
+    fixturePage.setView({...session(mode), fixed: false, checks_total: 2,
+      scenario: {id: 'missing-configmap', title: 'Find the failing Pod', level: 2}, next_check: podEventsCheck});
+    let treeRequests = 0;
+    await page.route('**/*', route => {
+      const url = new URL(route.request().url());
+      if (url.pathname === '/argocd/applications/argocd/shop-web-prod') {
+        return route.fulfill({contentType: 'text/html', body: `<!doctype html><html><body>
+          <div class="application-resource-tree__node-title">django-6db695b9cf-aaaaa</div>
+          <script src="/coach/assets/coach.js"></script></body></html>`});
+      }
+      if (url.pathname === '/argocd/api/v1/applications/shop-web-prod/resource-tree') {
+        treeRequests += 1;
+        return route.fulfill({json: {nodes: [failingPod('django-6db695b9cf-aaaaa')]}});
+      }
+      return route.fallback();
+    });
+    try {
+      await page.goto(podURL('django-6db695b9cf-aaaaa'));
+      await page.clock.install();
+      await page.locator('#argocd-coach-host [data-action="begin"]').click();
+      if (mode === 'demonstration') await page.locator('#argocd-coach-host [data-action="advance"]').click();
+      else await page.locator('#argocd-coach-host [data-action="show-location"]').first().click();
+      // Argo has found the Pod, so it opens the drawer, but the drawer's header never loads.
+      await page.evaluate(() => document.body.insertAdjacentHTML('beforeend',
+        '<div id="stuck" class="sliding-panel sliding-panel--opened"><p>Loading…</p></div>'));
+      for (let attempt = 0; attempt < 64; attempt += 1) await page.clock.runFor(500);
+      // Guided collapses the coach while an Argo drawer is open; closing it shows the hint.
+      if (mode === 'guided') await page.evaluate(() => document.querySelector('#stuck').remove());
+      await page.locator('#argocd-coach-host [role="status"]').filter({hasText:
+        mode === 'demonstration' ? /could not open Events/ : /Open the failing Pod and read its Events/}).waitFor();
+      assert.ok(treeRequests >= 10, `the tree was rechecked while waiting (${treeRequests} requests)`);
+    } finally { await browser.close(); }
+  });
+}
+
 test('demo stops after one ineffective History click', {timeout: 15000}, async () => {
   const {browser, page} = await fixture('demonstration');
   await page.route('**/argocd/applications/argocd/shop-web-prod', route =>
