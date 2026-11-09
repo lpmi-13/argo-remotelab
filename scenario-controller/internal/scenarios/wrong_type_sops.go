@@ -38,10 +38,11 @@ secrets: 404
 `,
 	},
 	{
+		// Kubernetes accepts any printable name except one containing "=".
 		name: "map",
 		plaintext: `# Secrets for django-app
 secrets:
-  invalid-env-name: "wrong-map-shape"
+  invalid=env-name: "wrong-map-shape"
 `,
 	},
 }

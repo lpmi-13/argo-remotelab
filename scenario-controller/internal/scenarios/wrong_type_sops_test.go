@@ -10,7 +10,7 @@ func TestWrongTypeSopsVariantsCoverExpectedShapes(t *testing.T) {
 		"string": `secrets: "not-a-map"`,
 		"list":   "secrets:\n  - DB_PASSWORD=not-a-map",
 		"int":    "secrets: 404",
-		"map":    `invalid-env-name: "wrong-map-shape"`,
+		"map":    `invalid=env-name: "wrong-map-shape"`,
 	}
 
 	if len(wrongTypeSopsVariants) != len(want) {
