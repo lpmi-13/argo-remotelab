@@ -57,9 +57,12 @@ spec:
         image: {{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         env:
+        {{- /* A decrypted secret replaces the plain value of the same name. */}}
         {{- range $key, $value := .Values.env }}
+        {{- if not (and (kindIs "map" $.Values.secrets) (hasKey $.Values.secrets $key)) }}
         - name: {{ $key }}
           value: {{ $value | quote }}
+        {{- end }}
         {{- end }}
         {{- range $key, $value := .Values.secrets }}
         - name: {{ $key }}
