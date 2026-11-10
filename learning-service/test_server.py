@@ -439,6 +439,104 @@ class LearningServiceTests(unittest.TestCase):
         refresh.assert_called_once_with("/api/refresh", "POST", {})
         self.assertEqual(replies[0][0], 202)
 
+    def test_only_pushes_after_preparation_count_as_learner_commits(self):
+        trigger = "f" * 40
+        pushes = [("RESETTING", "a" * 40), ("INJECTING", trigger), ("READY", trigger),
+                  ("INVESTIGATING", "b" * 40)]
+        active = session(name="sops-global-mac-mismatch", mode="demonstration")
+        with patch.object(server, "WEBHOOK_SECRET", "test-secret"), \
+             patch.dict(server.SESSIONS, {"test": active}, clear=True), \
+             patch.object(server, "ACTIVE_SESSION_ID", "test"):
+            for state, sha in pushes:
+                payload = {"ref": "refs/heads/main", "after": sha,
+                           "commits": [{"modified": ["chart/django-app/secrets.yaml.enc"], "message": "change"}]}
+                raw = json.dumps(payload).encode()
+                handler = object.__new__(server.Handler)
+                handler.raw_body = raw
+                handler.headers = {"X-Gitea-Signature": hmac.new(b"test-secret", raw, hashlib.sha256).hexdigest()}
+                handler.respond = lambda status, body: None
+                run = {"state": state, "trigger_revision": trigger}
+                with patch.object(server, "controller",
+                                  side_effect=lambda path, *rest, run=run: (200, run) if path.startswith("/api/runs/") else (202, {})):
+                    handler.webhook(payload)
+        self.assertEqual([action["details"]["sha"] for action in active["actions"]], ["b" * 40])
+
+    def test_injected_fault_does_not_raise_a_repair_alert(self):
+        broken = probe(fixed=False, durable=False)
+        broken["status"]["conditions"] = [{"type": "ComparisonError", "message": "Cannot decrypt MAC"}]
+        broken["status"]["reconciledAt"] = "2026-11-10T16:06:20Z"
+        run = session(name="sops-global-mac-mismatch", mode="demonstration")
+        view = server.build_session_view(run, {"state": "READY"}, broken, False)
+        self.assertNotIn("alert", view)
+
+    def test_render_error_alert_waits_for_argo_to_compare_the_pushed_commit(self):
+        pushes = {
+            "Argo comparison noted at push": {"at": server.argo_time("2026-11-10T16:06:30Z"),
+                                              "reconciled_before": "2026-11-10T16:06:20Z"},
+            "no comparison noted": {"at": server.argo_time("2026-11-10T16:06:30Z"), "reconciled_before": None},
+        }
+        for name, push in pushes.items():
+            with self.subTest(name):
+                broken = probe(fixed=False, durable=False)
+                broken["status"]["conditions"] = [{"type": "ComparisonError", "message": "MAC mismatch"}]
+                broken["status"]["reconciledAt"] = "2026-11-10T16:06:20Z"
+                run = session(name="hmac-mismatch", mode="demonstration")
+                run["actions"].append({"type": "commit_pushed", **push,
+                                       "details": {"sha": "b" * 40, "files": server.PACKS["hmac-mismatch"]["fix_paths"]}})
+                # Argo still shows the error it found in the previous commit.
+                view = server.build_session_view(run, {"state": "INVESTIGATING"}, broken, False)
+                self.assertNotIn("alert", view)
+                # A comparison that started before the push can finish after it.
+                broken["status"]["reconciledAt"] = "2026-11-10T16:06:29Z"
+                broken["annotations"] = {"argocd.argoproj.io/refresh": "hard"}
+                view = server.build_session_view(run, {"state": "INVESTIGATING"}, broken, False)
+                self.assertNotIn("alert", view)
+                broken["status"]["reconciledAt"] = "2026-11-10T16:06:31Z"
+                del broken["annotations"]
+                view = server.build_session_view(run, {"state": "INVESTIGATING"}, broken, False)
+                self.assertEqual(view["alert"]["reason_code"], "fix_broke_render")
+
+    def test_check_with_two_places_points_where_argo_shows_the_error(self):
+        render_failed = probe(fixed=False, durable=False)
+        render_failed["status"]["conditions"] = [{"type": "ComparisonError", "message": "cannot render secrets"}]
+        apply_failed = probe(fixed=False, durable=False)
+        apply_failed["status"]["operationState"] = {"phase": "Failed", "message": "invalid=env-name is not valid"}
+        cases = [("render failure", render_failed, set(), "app.conditions"),
+                 ("apply failure", apply_failed, set(), "app.operation"),
+                 ("already visited", apply_failed, {"app.conditions"}, "app.conditions")]
+        for name, status, visited, expected in cases:
+            with self.subTest(name):
+                run = session(name="wrong-type-sops", mode="demonstration")
+                run["passed"] = {"application"}
+                run["visited"] = visited
+                self.assertEqual(server.next_check(run, status)["target"], expected)
+
+    def test_push_notes_argo_comparison_before_requesting_refresh(self):
+        active = session(name="hmac-mismatch", mode="demonstration")
+        payload = {"ref": "refs/heads/main", "after": "b" * 40,
+                   "commits": [{"modified": ["chart/django-app/values.yaml"], "message": "fix"}]}
+        raw = json.dumps(payload).encode()
+        handler = object.__new__(server.Handler)
+        handler.raw_body = raw
+        handler.headers = {"X-Gitea-Signature": hmac.new(b"test-secret", raw, hashlib.sha256).hexdigest()}
+        handler.respond = lambda status, body: None
+        calls = []
+
+        def controller(path, *rest):
+            calls.append(path.split("?")[0])
+            if path.startswith("/probe"):
+                return 200, {"status": {"reconciledAt": "2026-11-10T16:06:20Z"}}
+            if path.startswith("/api/runs/"):
+                return 200, {"state": "INVESTIGATING", "trigger_revision": "f" * 40}
+            return 202, {}
+        with patch.object(server, "WEBHOOK_SECRET", "test-secret"), \
+             patch.dict(server.SESSIONS, {"test": active}, clear=True), \
+             patch.object(server, "ACTIVE_SESSION_ID", "test"), \
+             patch.object(server, "controller", side_effect=controller):
+            handler.webhook(payload)
+        self.assertLess(calls.index("/probe"), calls.index("/api/refresh"))
+        self.assertEqual(active["actions"][0]["reconciled_before"], "2026-11-10T16:06:20Z")
+
     def test_invalid_webhook_signature_cannot_refresh(self):
         payload = {"ref": "refs/heads/main", "after": "abc123", "commits": []}
         handler = object.__new__(server.Handler)

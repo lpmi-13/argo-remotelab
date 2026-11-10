@@ -73,6 +73,11 @@ a.secondary { display: inline-flex; align-items: center; padding: var(--coach-bu
 .link { color: var(--coach-accent-text); text-decoration: underline; border: 0; background: transparent; padding-left: 0; padding-right: 0; }
 .message { margin: 9px 0; padding: 9px 10px; border-left: 3px solid var(--coach-accent); background: var(--coach-page); }
 .message.error { border-left-color: var(--coach-degraded); }
+.argo-notice { margin: 14px 0 0; padding: 9px 10px; border-left: 3px solid var(--coach-accent); background: var(--coach-page); }
+.argo-notice ul { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
+.argo-notice q { color: var(--coach-text); font-weight: 600; line-height: 1.38; }
+.argo-notice span { color: var(--coach-muted); }
+.argo-notice li p { margin: 3px 0 0; line-height: 1.4; }
 .target-list { padding: 0; list-style: none; margin: 10px 0; }
 .evidence-map { margin-top: 14px; border-top: 1px solid var(--coach-border); padding-top: 11px; }
 .evidence-map summary { color: var(--coach-muted); cursor: pointer; font-size: 12px; font-weight: 700; }

@@ -83,7 +83,10 @@ async function fixture(mode, history = false, applicationCard = false, fixSurfac
       {id: 'console-history', title: 'Read the release history', level: 1, brief: 'Find the revision.'},
     ]}});
     if (url.pathname === '/argocd/applications') {
-      const cardMarkup = applicationCard ? '<a id="application-card" href="/argocd/applications/argocd/shop-web-prod" onclick="sessionStorage.setItem(\'application-clicked\', \'true\')"><span>shop-web-prod</span></a>' : '';
+      // 'under-panel' puts the card where the coach sits, as the fourth tile does on a wide screen.
+      const cardStyle = applicationCard === 'under-panel'
+        ? ' style="position: absolute; top: 140px; right: 40px; width: 300px; height: 160px; display: block"' : '';
+      const cardMarkup = applicationCard ? `<a id="application-card"${cardStyle} href="/argocd/applications/argocd/shop-web-prod" onclick="sessionStorage.setItem('application-clicked', 'true')"><span>shop-web-prod</span></a>` : '';
       return route.fulfill({contentType: 'text/html', body: `<!doctype html><html><head><meta charset="utf-8"></head><body>${cardMarkup}
         <script src="/coach/assets/coach.js"></script></body></html>`});
     }
@@ -130,8 +133,10 @@ test('an expired session returns to missions while other errors stay visible', {
     await page.locator('#argocd-coach-host [data-action="begin"]').click();
     setSessionFailure(503, 'learning service unavailable');
     await page.reload();
-    await page.locator('#argocd-coach-host [role="alert"]').waitFor();
-    assert.match(await page.locator('#argocd-coach-host [role="alert"]').innerText(), /learning service unavailable/);
+    // The reloaded coach shows its last step from the cached view, with the error beside it.
+    const failure = page.locator('#argocd-coach-host .message.error, #argocd-coach-host [role="alert"]');
+    await failure.first().waitFor();
+    assert.match(await failure.first().innerText(), /learning service unavailable/);
     assert.equal(new URL(page.url()).pathname, '/argocd/applications');
 
     await page.evaluate(cached => sessionStorage.setItem('argo-coach:initial-view:session-1', JSON.stringify(cached)),
@@ -184,6 +189,222 @@ test('first demo step clicks the Application after one countdown', {timeout: 450
         'Open shop-web-prod → History and Rollback; find Revision in the newest entry.');
     } finally { await browser.close(); }
   }
+});
+
+test('demo moves the coach off a target it would otherwise cover before clicking it', {timeout: 30000}, async () => {
+  const {browser, page} = await fixture('demonstration', false, 'under-panel');
+  try {
+    const card = await page.locator('#application-card').boundingBox();
+    const box = () => page.locator('#argocd-coach-host .panel').boundingBox();
+    const overlaps = (a, b) => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    assert.ok(overlaps(await box(), card), 'fixture should start with the card under the coach');
+    await page.locator('#argocd-coach-host [data-action="advance"]').click();
+    await page.locator('#argocd-coach-host .coach-pointer[data-visible]').waitFor();
+    const spot = await page.locator('#argocd-coach-host .spotlight').last().boundingBox();
+    assert.ok(overlaps(spot, card), 'the highlight frames the card');
+    assert.equal(overlaps(await box(), spot), false, 'the coach no longer covers the highlight');
+    await page.waitForURL('**/argocd/applications/argocd/shop-web-prod');
+    assert.equal(await page.evaluate(() => sessionStorage.getItem('application-clicked')), 'true');
+  } finally { await browser.close(); }
+});
+
+const overlapping = (a, b) => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+
+/**
+ * Shows a popup the way Argo CD 3.5 does (react-toastify), by default where the coach sits.
+ * `silent` keeps it hidden until revealArgoPopup() shows it by a change the coach's page
+ * observer does not see, so only the coach's next render can find it.
+ */
+const showArgoPopup = (page, text = 'Unable to load data: revision main must be resolved',
+  {style = 'top: 90px; right: 30px', silent = false} = {}) => page.evaluate(({text, style, silent}) => {
+  if (silent) {
+    const css = document.createElement('style');
+    css.id = 'popup-pending';
+    css.textContent = '.Toastify__toast { visibility: hidden }';
+    document.head.append(css);
+  }
+  const container = document.createElement('div');
+  container.className = 'Toastify__toast-container Toastify__toast-container--bottom-right';
+  container.innerHTML = `<div class="Toastify__toast Toastify__toast--error" style="position: fixed; ${style}; width: 320px; height: 64px">
+    <div class="Toastify__toast-body"><div><b>Unable to load data</b>: ${text.replace('Unable to load data: ', '')}</div></div>
+    <button class="Toastify__close-button" aria-label="close"></button></div>`;
+  document.body.append(container);
+}, {text, style, silent});
+const revealArgoPopup = page => page.evaluate(() => document.querySelector('#popup-pending').remove());
+const closeArgoPopup = page => page.evaluate(() => document.querySelector('.Toastify__toast-container').remove());
+const onScreen = (box, page) => box.x >= 0 && box.y >= 0 &&
+  box.x + box.width <= page.viewportSize().width && box.y + box.height <= page.viewportSize().height;
+
+/** Adds Argo's Application header as it looks after a failed comparison, by default under the coach. */
+const showArgoHeader = (page, conditions = '1 Error') => page.evaluate(conditions => {
+  const header = document.createElement('div');
+  header.className = 'application-status-panel';
+  header.style.cssText = 'position: fixed; top: 100px; right: 40px; width: 320px; display: flex; gap: 10px';
+  header.innerHTML = `<div class="application-status-panel__item"><div class="application-status-panel__item-name">LAST SYNC</div>
+      <div class="application-status-panel__item-value">Sync OK to abc1234</div></div>
+    <div class="application-status-panel__item"><div class="application-status-panel__item-name">APP CONDITIONS</div>
+      <div class="application-status-panel__item-value application-status-panel__conditions"><a>${conditions}</a></div></div>`;
+  document.body.append(header);
+}, conditions);
+
+test('Sync OK beside a comparison error is explained as expected; beside a warning it is not', {timeout: 30000}, async () => {
+  const fixturePage = await fixture('guided');
+  const {browser, page} = fixturePage;
+  try {
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    const notice = page.locator('#argocd-coach-host .argo-notice');
+    await showArgoHeader(page, '1 Warning');
+    await page.waitForTimeout(300);
+    assert.equal(await notice.count(), 0, 'a warning does not contradict Sync OK');
+    await page.evaluate(() => document.querySelector('.application-status-panel').remove());
+
+    await showArgoHeader(page);
+    await notice.waitFor();
+    assert.equal(await notice.locator('.step-eyebrow').textContent(), 'Expected in this scenario');
+    assert.deepEqual(await notice.locator('li').evaluateAll(items => items.map(item => item.innerText.replace(/\s+/g, ' ').trim())),
+      ['Sync OK under Last Sync That sync was of an earlier commit. Argo CD cannot sync the newest one until it can compare it.']);
+    assert.equal(overlapping(await page.locator('#argocd-coach-host .panel').boundingBox(),
+      await page.locator('.application-status-panel__item').first().boundingBox()), false, 'the coach moved off Last Sync');
+
+    await showArgoPopup(page, undefined, {style: 'bottom: 16px; right: 16px'});
+    await page.waitForFunction(() => document.querySelector('#argocd-coach-host').shadowRoot.querySelectorAll('.argo-notice li').length === 2);
+    assert.deepEqual(await notice.locator('q').allTextContents(), ['Unable to load data: revision main must be resolved', 'Sync OK']);
+
+    // When the learner's own commit fails to render, the coach's alert says so; the notes are no longer "expected".
+    fixturePage.setView({...session('guided'), alert: {reason_code: 'fix_broke_render',
+      message: 'The new commit still has a ComparisonError. Read the Application condition before editing again.'}});
+    await page.waitForFunction(() => document.querySelector('#argocd-coach-host').shadowRoot
+      .querySelector('.argo-notice .step-eyebrow')?.textContent === 'From the comparison error', null, {timeout: 6000});
+  } finally { await browser.close(); }
+});
+
+test('demo steps off Argo\'s popup from a corner it chose for a highlight and stays on screen as it grows', {timeout: 30000}, async () => {
+  const {browser, page} = await fixture('demonstration', false, 'under-panel');
+  try {
+    await page.clock.install();
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    await page.locator('#argocd-coach-host [data-action="advance"]').click();
+    await page.clock.runFor(100);
+    await page.locator('#argocd-coach-host .coach-pointer[data-visible]').waitFor();
+    const panel = page.locator('#argocd-coach-host .panel');
+    const moved = await panel.boundingBox();
+    assert.ok(moved.y > 300, 'the coach moved to a bottom corner to clear the card');
+    // A popup away from the coach adds the explanation without moving it.
+    await showArgoPopup(page, undefined, {style: 'top: 16px; left: 16px'});
+    await page.locator('#argocd-coach-host .argo-notice').waitFor();
+    assert.ok(onScreen(await panel.boundingBox(), page), `the grown coach fits the window: ${JSON.stringify(await panel.boundingBox())}`);
+    // Argo shows the same popup again in its usual bottom-right corner.
+    await closeArgoPopup(page);
+    await showArgoPopup(page, undefined, {style: 'bottom: 16px; right: 16px'});
+    await page.waitForFunction(() => {
+      const coach = document.querySelector('#argocd-coach-host').shadowRoot.querySelector('.panel').getBoundingClientRect();
+      const popup = document.querySelector('.Toastify__toast').getBoundingClientRect();
+      return coach.right <= popup.left || coach.left >= popup.right || coach.bottom <= popup.top || coach.top >= popup.bottom;
+    }, null, {timeout: 3000}).catch(() => {});
+    const [box, popup, spot] = [await panel.boundingBox(), await page.locator('.Toastify__toast').boundingBox(),
+      await page.locator('#argocd-coach-host .spotlight').last().boundingBox()];
+    assert.equal(overlapping(box, popup), false, 'the popup is visible');
+    assert.equal(overlapping(box, spot), false, 'the highlight is still visible');
+    assert.ok(onScreen(box, page), `the coach fits the window: ${JSON.stringify(box)}`);
+  } finally { await browser.close(); }
+});
+
+test('a popup the coach only finds while re-rendering still moves it, and the next step returns it to its corner', {timeout: 30000}, async () => {
+  const fixturePage = await fixture('guided');
+  const {browser, page} = fixturePage;
+  try {
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    const panel = page.locator('#argocd-coach-host .panel');
+    const usual = await panel.boundingBox();
+    await showArgoPopup(page, undefined, {silent: true});
+    await revealArgoPopup(page);
+    await page.locator('#argocd-coach-host .argo-notice').waitFor({timeout: 6000});
+    assert.equal(overlapping(await panel.boundingBox(), await page.locator('.Toastify__toast').boundingBox()), false);
+    await closeArgoPopup(page);
+    fixturePage.setView({...session('guided'), next_check: {id: 'cause', target: 'app.conditions', where: 'Application conditions',
+      question: 'Which field?', hint: 'Read Conditions.', action: 'Open Conditions.', reason: 'Conditions explain the error.',
+      learning: 'The field failed.', demo: {what: 'Open Conditions.', why: 'Conditions explain the error.'}, available: false}});
+    await page.waitForFunction(() => !document.querySelector('#argocd-coach-host').shadowRoot.querySelector('.argo-notice'),
+      null, {timeout: 6000});
+    const back = await panel.boundingBox();
+    assert.deepEqual([back.x, back.y], [usual.x, usual.y], 'the coach is back in its usual corner');
+  } finally { await browser.close(); }
+});
+
+test('demo explains Argo\'s unresolved revision popup, keeps it in view, and leaves time to read it', {timeout: 30000}, async () => {
+  const {browser, page} = await fixture('demonstration', false, true);
+  try {
+    await page.clock.install();
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    await page.clock.runFor(13000);
+    await showArgoPopup(page);
+    const notice = page.locator('#argocd-coach-host .argo-notice');
+    await notice.waitFor();
+    assert.equal(await notice.locator('.step-eyebrow').textContent(), 'Expected in this scenario');
+    assert.equal(await notice.locator('q').textContent(), 'Unable to load data: revision main must be resolved');
+    assert.equal(await notice.locator('li p').textContent(), 'Argo CD shows this while it cannot compare the newest commit.');
+    assert.equal(overlapping(await page.locator('#argocd-coach-host .panel').boundingBox(),
+      await page.locator('.Toastify__toast').boundingBox()), false, 'the coach moved off the popup');
+    assert.ok(Number(await page.locator('#argocd-coach-host [data-demo-seconds]').textContent()) >= 7.9,
+      'the countdown leaves time to read the explanation');
+    await page.clock.runFor(7500);
+    assert.equal(new URL(page.url()).pathname, '/argocd/applications', 'the demo waited for the reader');
+    await closeArgoPopup(page);
+    await page.clock.runFor(100);
+    assert.equal(await notice.count(), 1, 'the explanation outlasts the popup for the rest of the step');
+    await page.clock.runFor(500);
+    await page.locator('#argocd-coach-host .panel[data-doing]').waitFor();
+  } finally { await browser.close(); }
+});
+
+test('Guided explains Argo popups until the step moves on; Challenge leaves them to the learner', {timeout: 30000}, async () => {
+  for (const mode of ['guided', 'challenge']) {
+    const fixturePage = await fixture(mode);
+    const {browser, page} = fixturePage;
+    try {
+      await page.locator('#argocd-coach-host [data-action="begin"]').click();
+      await showArgoPopup(page, 'Unable to load data: something else failed');
+      await showArgoPopup(page);
+      const notice = page.locator('#argocd-coach-host .argo-notice');
+      if (mode === 'challenge') {
+        await page.waitForTimeout(300);
+        assert.equal(await notice.count(), 0);
+        continue;
+      }
+      await notice.waitFor();
+      assert.equal(await notice.locator('q').textContent(), 'Unable to load data: revision main must be resolved');
+      await closeArgoPopup(page);
+      await closeArgoPopup(page);
+      await page.waitForTimeout(4500);
+      assert.equal(await notice.count(), 1, 'a poll on the same step keeps the explanation');
+      fixturePage.setView({...session(mode), next_check: {id: 'cause', target: 'app.conditions', where: 'Application conditions',
+        question: 'Which field?', hint: 'Read Conditions.', action: 'Open Conditions.', reason: 'Conditions explain the error.',
+        learning: 'The field failed.', demo: {what: 'Open Conditions.', why: 'Conditions explain the error.'}, available: false}});
+      await page.waitForFunction(() => !document.querySelector('#argocd-coach-host').shadowRoot.querySelector('.argo-notice'),
+        null, {timeout: 6000});
+    } finally { await browser.close(); }
+  }
+});
+
+test('a page reload mid-run resumes the coach at the current step before the session reloads', {timeout: 30000}, async () => {
+  const fixturePage = await fixture('demonstration', false, true);
+  const {browser, page} = fixturePage;
+  try {
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    fixturePage.setView({...session('demonstration'), scenario: {id: 'console-orientation', title: 'Find the deployed revision', level: 1},
+      checks_passed: 1, checks_total: 2});
+    const stepCount = () => page.locator('#argocd-coach-host .step-count').textContent({timeout: 1500});
+    await page.waitForFunction(() => document.querySelector('#argocd-coach-host').shadowRoot
+      .querySelector('.step-count')?.textContent === 'Step 2 of 2', null, {timeout: 6000});
+    // Hold back every session response, including the replies to actions the reloaded page sends.
+    await page.route(url => url.pathname.startsWith('/coach/learning/api/sessions/session-1'), async route => {
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      return route.fallback();
+    });
+    await page.reload();
+    assert.equal(await stepCount(), 'Step 2 of 2');
+  } finally { await browser.close(); }
 });
 
 test('first mission names Revision before highlighting its value', {timeout: 30000}, async () => {
@@ -267,9 +488,12 @@ for (const [name, desiredInitially, selectedNode, duplicateName = false] of [
     await page.route('**/*', route => {
       const url = new URL(route.request().url());
       if (url.pathname === '/argocd/applications/argocd/shop-web-prod') {
+        // Argo CD 3.5 shows each node's short kind under its icon.
         const nodeMarkup = duplicateName ? `
-          <div class="application-resource-tree__node-title" onclick="tabClicks.service++; history.replaceState(null, '', '?view=tree&node=%2FService%2Fapplications%2Fdjango%2F0')">django</div>
-          <div class="application-resource-tree__node-title" onclick="tabClicks.node++; history.replaceState(null, '', '?view=tree&node=%2FDeployment%2Fapplications%2Fdjango%2F0')">django</div>` : `
+          <div class="application-resource-tree__node"><div class="application-resource-tree__node-kind-icon"><div class="application-resource-tree__node-kind">svc</div></div>
+            <div class="application-resource-tree__node-content"><div class="application-resource-tree__node-title" onclick="tabClicks.service++; history.replaceState(null, '', '?view=tree&node=%2FService%2Fapplications%2Fdjango%2F0')">django</div></div></div>
+          <div class="application-resource-tree__node"><div class="application-resource-tree__node-kind-icon"><div class="application-resource-tree__node-kind">deploy</div></div>
+            <div class="application-resource-tree__node-content"><div class="application-resource-tree__node-title" onclick="tabClicks.node++; history.replaceState(null, '', '?view=tree&node=%2FDeployment%2Fapplications%2Fdjango%2F0')">django</div></div></div>` : `
           <div class="application-resource-tree__node-title" onclick="tabClicks.node++; history.replaceState(null, '', '?view=tree&node=%2FDeployment%2Fapplications%2Fdjango%2F0&tab=manifest')">django</div>`;
         return route.fulfill({contentType: 'text/html', body: `<!doctype html><html><body>
           <script>window.tabClicks = {node: 0, service: 0, live: 0, desired: 0};</script>
@@ -307,8 +531,9 @@ for (const [name, desiredInitially, selectedNode, duplicateName = false] of [
         await page.locator('#argocd-coach-host [data-action="advance"]').click();
       }
       await page.locator('#argocd-coach-host .demo-explanation span').first().filter({hasText: 'Found'}).waitFor();
+      // A click on the Deployment, never a page reload: window.tabClicks starts again on reload.
       assert.deepEqual(await page.evaluate(() => window.tabClicks),
-        {node: selectedNode || duplicateName ? 0 : 1, service: 0,
+        {node: selectedNode ? 0 : 1, service: 0,
           live: 0, desired: desiredInitially ? 0 : 1});
       assert.equal(new URL(page.url()).searchParams.get('node'), '/Deployment/applications/django/0');
       assert.equal(await page.locator('#argocd-coach-host .demo-explanation p').first().textContent(), '/api/health/');
@@ -355,6 +580,149 @@ test('condition cue points to the matching error before reporting its value', {t
     }));
     assert.ok(widths.highlight < widths.condition / 2, JSON.stringify(widths));
     assert.equal(actions.some(action => action.type === 'evidence_check_answered'), false);
+  } finally { await browser.close(); }
+});
+
+/** An Argo CD 3.5 Application page: no Conditions button; "1 Error" under App Conditions opens the panel in place. */
+const conditionsPage = `<!doctype html><html><body>
+  <div class="application-status-panel" style="display: flex; gap: 20px; margin: 120px 0 0 40px">
+    <div class="application-status-panel__item"><label>APP CONDITIONS</label>
+      <div class="application-status-panel__item-value application-status-panel__conditions"
+        onclick="history.pushState(null, '', location.pathname + '?conditions=true'); document.querySelector('.application-conditions').hidden = false">
+        <a class="error">1 Error</a></div></div></div>
+  <section class="application-conditions" hidden style="width: 700px; padding: 30px">
+    <p>Manifest generation failed</p><span id="integrity-error">sops.mac integrity check failed</span>
+  </section><script src="/coach/assets/coach.js"></script></body></html>`;
+const conditionsCheck = {id: 'cause', target: 'app.conditions', where: 'Conditions',
+  question: 'Which SOPS integrity field mismatched?', hint: 'Read the field named in Conditions.',
+  action: 'Open Conditions and find the integrity field.', reason: 'Conditions explain the render failure.',
+  learning: 'The integrity field failed.',
+  demo: {what: 'Open shop-web-prod → Conditions; read the SOPS integrity field in the error.',
+    look: 'Look for the integrity field named in the Conditions error.',
+    why: 'Conditions names the field that failed validation.'},
+  demonstration_answer: 'sops.mac', available: true};
+
+test('demo opens Conditions from App Conditions without reloading the page', {timeout: 30000}, async () => {
+  const fixturePage = await fixture('demonstration');
+  const {browser, page} = fixturePage;
+  fixturePage.setView({...session('demonstration'),
+    scenario: {id: 'sops-global-mac-mismatch', title: 'SOPS global MAC mismatch', level: 4},
+    checks_passed: 1, checks_total: 2, next_check: conditionsCheck});
+  await page.route('**/argocd/applications/argocd/shop-web-prod', route =>
+    route.fulfill({contentType: 'text/html', body: conditionsPage}));
+  try {
+    await page.goto('http://lab.test/argocd/applications/argocd/shop-web-prod');
+    await page.evaluate(() => { window.samePage = true; });
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    await page.locator('#argocd-coach-host [data-action="advance"]').click();
+    await page.locator('#argocd-coach-host .coach-pointer[data-visible]').waitFor();
+    const spot = await page.locator('#argocd-coach-host .spotlight').last().boundingBox();
+    assert.ok(overlapping(spot, await page.locator('.application-status-panel__conditions a').boundingBox()),
+      'the demo points at the App Conditions error');
+    await page.locator('#argocd-coach-host .demo-explanation span').first().filter({hasText: 'Look'}).waitFor({timeout: 15000});
+    assert.equal(await page.evaluate(() => window.samePage), true, 'the page did not reload');
+    assert.match(page.url(), /conditions=true/);
+    assert.equal(await page.locator('.application-conditions').isVisible(), true);
+  } finally { await browser.close(); }
+});
+
+test('demo reaches Repositories through the Settings sidebar entry and tile, as a person would', {timeout: 30000}, async () => {
+  const fixturePage = await fixture('demonstration');
+  const {browser, page} = fixturePage;
+  fixturePage.setView({...session('demonstration'),
+    scenario: {id: 'repo-auth', title: 'Argo CD cannot fetch the shop source', level: 5},
+    checks_passed: 2, checks_total: 4, fixed: false,
+    next_check: {id: 'working-source', target: 'settings.repos', where: 'Settings and repositories',
+      question: 'Which repository works?', hint: 'Open Settings → Repositories.', action: 'Compare the repositories.',
+      reason: 'Repositories shows the working entry.', learning: 'This is the working repository.',
+      demo: {what: 'Open Settings → Repositories; find the working repository URL.',
+        look: 'Look for the working repository URL.', why: 'The working entry shows the URL Argo can fetch.'},
+      demonstration_answer: 'http://gitea.applications.svc.cluster.local:3000/remotelab/django-app.git', available: true}});
+  // Argo CD 3.5 is a single-page app: its sidebar and Settings tiles change the page in place.
+  await page.route('**/argocd/applications/argocd/shop-web-prod', route => route.fulfill({contentType: 'text/html', body: `<!doctype html><html><body>
+    <nav style="width: 200px"><div class="sidebar__nav-item" onclick="openSettings()"><div><i></i>Settings</div></div></nav>
+    <main id="page" style="margin-left: 240px">shop-web-prod</main>
+    <script>
+      window.clicks = [];
+      function openSettings() {
+        clicks.push('settings'); history.pushState(null, '', '/argocd/settings');
+        document.querySelector('#page').innerHTML =
+          '<div class="settings-overview__redirect-panel" onclick="clicks.push(\\'certificates\\')"><div class="settings-overview__redirect-panel__title">Repository certificates and known hosts</div></div>' +
+          '<div class="settings-overview__redirect-panel" onclick="openRepositories()"><div class="settings-overview__redirect-panel__title">Repositories</div></div>';
+      }
+      function openRepositories() {
+        clicks.push('repositories'); history.pushState(null, '', '/argocd/settings/repos');
+        setTimeout(() => { document.querySelector('#page').innerHTML =
+          '<div title="http://gitea.applications.svc.cluster.local:3000/remotelab/django-app.git">' +
+          'http://gitea.applications.svc.cluster.local:3000/remotelab/django-app.git</div>'; }, 300);
+      }
+    </script><script src="/coach/assets/coach.js"></script></body></html>`}));
+  try {
+    await page.goto('http://lab.test/argocd/applications/argocd/shop-web-prod');
+    await page.evaluate(() => { window.samePage = true; });
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    await page.locator('#argocd-coach-host [data-action="advance"]').click();
+    await page.locator('#argocd-coach-host .demo-explanation span').first().filter({hasText: 'Look'}).waitFor({timeout: 20000});
+    assert.deepEqual(await page.evaluate(() => [window.samePage, window.clicks, location.pathname]),
+      [true, ['settings', 'repositories'], '/argocd/settings/repos']);
+  } finally { await browser.close(); }
+});
+
+test('demo opens the incident note, types each field, and submits it as a learner would', {timeout: 60000}, async () => {
+  const fixturePage = await fixture('demonstration');
+  const {browser, page} = fixturePage;
+  const note = {resource: 'secrets.yaml.enc', evidence: 'sops.mac', revision: 'a'.repeat(40),
+    cause: 'The SOPS global MAC no longer matches', fix: 'Re-encrypt the file'};
+  fixturePage.setView({...session('demonstration'), scenario: {id: 'sops-global-mac-mismatch', title: 'SOPS global MAC mismatch', level: 4},
+    fixed: true, checks_passed: 3, checks_total: 3, next_check: null, demonstration_note: note});
+  let submitted = null;
+  await page.route('**/coach/learning/api/sessions/session-1/note', route => {
+    submitted = route.request().postDataJSON();
+    return route.fulfill({status: 503, json: {error: 'note recorded by the test'}});
+  });
+  try {
+    await page.reload();
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    // Skip the reading beat before the note.
+    await page.locator('#argocd-coach-host .message', {hasText: 'Writing the incident note.'}).waitFor({timeout: 20000});
+    await page.locator('#argocd-coach-host [data-action="advance"]').click();
+    await page.locator('#argocd-coach-host #note-form').waitFor({timeout: 10000});
+    // The text arrives a few characters at a time, with the pointer on the field.
+    const typing = await page.waitForFunction(full => {
+      const root = document.querySelector('#argocd-coach-host').shadowRoot;
+      const value = root.querySelector('#note-cause')?.value || '';
+      return value.length > 0 && value.length < full.length && root.querySelector('.coach-pointer[data-visible]') ? value : false;
+    }, note.cause, {timeout: 20000, polling: 20});
+    assert.ok(note.cause.startsWith(await typing.jsonValue()));
+    for (let attempt = 0; attempt < 100 && !submitted; attempt += 1) await page.waitForTimeout(100);
+    assert.deepEqual(submitted, note);
+  } finally { await browser.close(); }
+});
+
+test('from Settings the demo returns to the Application through the sidebar and its tile', {timeout: 30000}, async () => {
+  const fixturePage = await fixture('demonstration', false, true);
+  const {browser, page} = fixturePage;
+  fixturePage.setView({...session('demonstration'),
+    scenario: {id: 'repo-auth', title: 'Argo CD cannot fetch the shop source', level: 5},
+    checks_passed: 3, checks_total: 4, fixed: false,
+    next_check: {id: 'source', target: 'app.header', where: 'Application details header',
+      question: 'Which repository URL does the Application use?', hint: 'Read the header.', action: 'Read the source.',
+      reason: 'The header shows the source Argo fetches.', learning: 'This URL is wrong.',
+      demo: {what: 'Open shop-web-prod; read its repository URL.', why: 'The header shows the source Argo fetches.'},
+      demonstration_answer: 'shop-web-prod', available: false}});
+  // Argo CD 3.5's sidebar changes the page in place; clicks are recorded across the tile's navigation.
+  await page.route('**/argocd/settings/repos', route => route.fulfill({contentType: 'text/html', body: `<!doctype html><html><body>
+    <nav><div class="sidebar__nav-item" onclick="sessionStorage.setItem('clicked-sidebar', 'yes'); history.pushState(null, '', '/argocd/applications');
+      document.querySelector('#page').innerHTML = '<a href=&quot;/argocd/applications/argocd/shop-web-prod&quot; onclick=&quot;sessionStorage.setItem(\\'clicked-tile\\', \\'yes\\')&quot;><span>shop-web-prod</span></a>'">
+      <div><i></i>Applications</div></div><div class="sidebar__nav-item"><div><i></i>ApplicationSets</div></div></nav>
+    <main id="page">Repositories</main><script src="/coach/assets/coach.js"></script></body></html>`}));
+  try {
+    await page.goto('http://lab.test/argocd/settings/repos');
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    await page.locator('#argocd-coach-host [data-action="advance"]').click();
+    await page.waitForURL('**/argocd/applications/argocd/shop-web-prod', {timeout: 20000});
+    assert.deepEqual(await page.evaluate(() => [sessionStorage.getItem('clicked-sidebar'), sessionStorage.getItem('clicked-tile')]),
+      ['yes', 'yes']);
   } finally { await browser.close(); }
 });
 
@@ -526,9 +894,13 @@ test('unhealthy release demo reads Health before naming its status', {timeout: 1
         look: 'Look for Health in the Application header.',
         why: 'The health badge shows whether the rollout is ready; compare Pods after reading it.'}},
   });
+  // As in Argo CD 3.5: the sidebar's health filters come before the header and use the same words.
   await page.route('**/argocd/applications/argocd/shop-web-prod**', route =>
     route.fulfill({contentType: 'text/html', body: `<!doctype html><html><body>
-      <span id="health">Progressing</span><script src="/coach/assets/coach.js"></script></body></html>`}));
+      <div class="filters" style="position: absolute; top: 420px; left: 10px"><div class="filter__item__label">Progressing</div></div>
+      <div class="application-status-panel" style="margin: 80px 0 0 260px"><div class="application-status-panel__item">
+        <label>APP HEALTH</label><div id="health" class="application-status-panel__item-value"><i class="fa fa-circle-notch"></i> Progressing</div></div></div>
+      <script src="/coach/assets/coach.js"></script></body></html>`}));
   try {
     await page.goto('http://lab.test/argocd/applications/argocd/shop-web-prod?view=tree');
     await page.clock.install();
@@ -1005,11 +1377,15 @@ test('demonstration shows the broken Git source and real commit before returning
     const pathname = new URL(route.request().url()).pathname;
     if (pathname === appURL) return route.fulfill({contentType: 'text/html',
       body: '<html><body><main>shop-web-prod</main><script src="/coach/assets/coach.js"></script></body></html>'});
+    // Gitea 28 markup: page content in <div role="main">, one code element per source line.
     if (pathname === sourceURL) return route.fulfill({contentType: 'text/html',
-      body: '<html><body><main><code>name: django-app-missing-config</code></main><script src="/coach/assets/coach.js"></script></body></html>'});
+      body: `<html><body><div role="main" class="page-content repository file"><table><tbody>
+        <tr><td class="lines-code chroma"><code class="code-inner"><span class="nt">name</span>: django-app-missing-config</code></td></tr>
+        </tbody></table></div><script src="/coach/assets/coach.js"></script></body></html>`});
     if (pathname === commitURL) return route.fulfill({contentType: 'text/html',
-      body: `<html><body><main><h3>fix: restore the affected deployment chart</h3>
-        <a href="#diff">${sourcePath}</a><code>- name: django-app-missing-config</code></main>
+      body: `<html><body><div role="main" class="page-content repository diff"><h3>fix: restore the affected deployment chart</h3>
+        <a class="muted file-link tw-font-mono" title="${sourcePath}" href="#diff">${sourcePath}</a>
+        <code class="code-inner">- name: django-app-missing-config</code></div>
         <script src="/coach/assets/coach.js"></script></body></html>`});
     if (pathname === '/coach/assets/coach.js') return route.fulfill({contentType: 'text/javascript', body: coach});
     if (pathname.startsWith('/coach/assets/ui/')) return route.fulfill({contentType: 'text/css',
@@ -1030,6 +1406,12 @@ test('demonstration shows the broken Git source and real commit before returning
     await page.locator('#argocd-coach-host .demo-timer:not([hidden])').waitFor();
     await page.locator('#argocd-coach-host [data-action="advance"]').click({noWaitAfter: true});
     await page.waitForURL('http://lab.test' + sourceURL);
+    // In Gitea too, the pointer and highlight show where to look.
+    const highlights = async selector => overlapping(
+      await page.locator('#argocd-coach-host .spotlight').last().boundingBox({timeout: 5000}),
+      await page.locator(selector).boundingBox());
+    await page.locator('#argocd-coach-host .coach-pointer[data-visible]').waitFor();
+    assert.ok(await highlights('code.code-inner'), 'the missing ConfigMap name is highlighted in the source');
     await page.locator('#argocd-coach-host .demo-explanation').getByText(/coach will restore the broken ConfigMap reference/).waitFor();
     assert.equal(fixCalls, 0);
     await page.locator('#argocd-coach-host [data-action="pause-demo"]').click();
@@ -1037,6 +1419,8 @@ test('demonstration shows the broken Git source and real commit before returning
     await page.locator('#argocd-coach-host [data-action="pause-demo"]').click();
     await page.locator('#argocd-coach-host [data-action="advance"]').click({noWaitAfter: true});
     await page.waitForURL('http://lab.test' + commitURL);
+    await page.locator('#argocd-coach-host .coach-pointer[data-visible]').waitFor();
+    assert.ok(await highlights('code.code-inner'), 'the changed line is highlighted in the commit');
     await page.locator('#argocd-coach-host .demo-explanation').getByText(/showing commit bbbbbbbbbb/).waitFor();
     assert.equal(fixCalls, 1);
     await page.reload();

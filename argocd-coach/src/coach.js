@@ -41,6 +41,16 @@
   /** @type {{x: number, y: number} | null} */
   let panelPosition = savedPosition && Number.isFinite(savedPosition.x) && Number.isFinite(savedPosition.y)
     ? savedPosition : null;
+  /** Where the coach moved to keep a highlighted control visible. @type {{x: number, y: number} | null} */
+  let clearPosition = null;
+  /** The step clearPosition was chosen for. @type {string | null} */
+  let clearStep = null;
+  /** @typedef {{id: string, quote: string, where: string, text: string}} ArgoNote */
+  /** What Argo CD shows that the coach is explaining, with the step each was last seen in. @type {(ArgoNote & {step: string | null})[]} */
+  let argoNotes = [];
+  /** Notes a demonstration has already held its countdown for, by note and step. @type {Set<string>} */
+  const heldNotes = new Set();
+  const argoNoticeReadDelay = 8000;
   let nativeOverlayOpen = false;
   let autoCollapsed = false;
   let hintVisible = false;
@@ -56,6 +66,8 @@
   let demoCountdown = null;
   let demoCountdownTicker = null;
   const demoAdvanceDelay = 15000;
+  const demoTypingDelay = 35;
+  let noteSubmissions = 0;
   const evidenceLocateDelay = 4000;
   const briefDuration = demoAdvanceDelay;
   let briefRemaining = briefDuration;
@@ -276,6 +288,8 @@
     if (open === nativeOverlayOpen) return;
     nativeOverlayOpen = open;
     host.toggleAttribute('data-native-overlay', open && view?.mode === 'demonstration');
+    // The drawer layout places the coach beside it; drop any spot chosen for the page underneath.
+    if (clearPosition) { clearPosition = null; render(); }
     if (view?.mode === 'demonstration') return;
     if (open && !collapsed) {
       collapsed = true;
@@ -287,7 +301,113 @@
       render();
     }
   }
-  const nativeOverlayObserver = new MutationObserver(updateNativeOverlay);
+  // What Argo CD shows during a comparison failure that can look like a second
+  // fault or contradict the error. Demonstration and Guided explain each one
+  // beside the step and keep the coach off it, so what Argo shows and its
+  // meaning can be read together. Challenge leaves them to the learner.
+  const argoPopups = [{pattern: /revision \S+ must be resolved/i,
+    text: 'Argo CD shows this while it cannot compare the newest commit.'}];
+  const argoNoteOrder = ['popup', 'sync-ok'];
+
+  /** @param {Element} toast */
+  const toastText = toast => (toast.querySelector('.Toastify__toast-body') || toast).textContent.replace(/\s+/g, ' ').trim();
+
+  function argoToasts() {
+    return Array.from(document.querySelectorAll('.Toastify__toast')).filter(visible);
+  }
+
+  /** @param {string} title An Application header item's heading, such as LAST SYNC. */
+  function statusItem(title) {
+    return Array.from(document.querySelectorAll('.application-status-panel__item'))
+      .find(item => visible(item) && item.textContent.trim().toUpperCase().startsWith(title));
+  }
+
+  /** @param {DOMRect} box */
+  const padded = box => ({left: box.left - 4, top: box.top - 4, right: box.right + 4, bottom: box.bottom + 4});
+
+  const explainingArgo = () => Boolean(view) && view.mode !== 'challenge' && !view.feedback;
+
+  /** @returns {(ArgoNote & {element: Element})[]} */
+  function argoNotesOnScreen() {
+    /** @type {(ArgoNote & {element: Element})[]} */
+    const notes = [];
+    for (const toast of argoToasts()) {
+      const quote = toastText(toast);
+      const known = argoPopups.find(popup => popup.pattern.test(quote));
+      if (known) {
+        notes.push({id: 'popup', quote, where: 'popup', text: known.text, element: toast});
+        break;
+      }
+    }
+    // The last successful sync was of an earlier commit; the error is about the newest one.
+    const lastSync = statusItem('LAST SYNC');
+    if (lastSync && /\bSync OK\b/.test(lastSync.textContent) &&
+        /\b\d+\s+Errors?\b/.test(statusItem('APP CONDITIONS')?.textContent || '')) {
+      notes.push({id: 'sync-ok', quote: 'Sync OK', where: 'under Last Sync', element: lastSync,
+        text: 'That sync was of an earlier commit. Argo CD cannot sync the newest one until it can compare it.'});
+    }
+    return notes;
+  }
+
+  // A note stays for the rest of the step after Argo stops showing what it explains.
+  function syncArgoNotes() {
+    const step = demoStepId();
+    const onScreen = explainingArgo() ? argoNotesOnScreen() : [];
+    const earlier = explainingArgo()
+      ? argoNotes.filter(note => note.step === step && !onScreen.some(seen => seen.id === note.id)) : [];
+    argoNotes = [...onScreen.map(({element, ...note}) => ({...note, step})), ...earlier]
+      .sort((a, b) => argoNoteOrder.indexOf(a.id) - argoNoteOrder.indexOf(b.id));
+    return onScreen;
+  }
+
+  function argoNoticeMarkup() {
+    if (!argoNotes.length) return '';
+    // A learner's commit can also break rendering; the coach's alert reports that case.
+    const heading = view.alert?.reason_code === 'fix_broke_render' ? 'From the comparison error' : 'Expected in this scenario';
+    return `<section class="argo-notice" role="note" aria-label="${heading}"><p class="step-eyebrow">${heading}</p>
+      <ul>${argoNotes.map(note => `<li><q>${escape(note.quote)}</q> <span>${escape(note.where)}</span>
+        <p>${escape(note.text)}</p></li>`).join('')}</ul></section>`;
+  }
+
+  /** Where Argo shows its popups and what the coach explains. An open drawer covers the header. */
+  function argoAreas(onScreen = explainingArgo() ? argoNotesOnScreen() : []) {
+    if (!explainingArgo()) return [];
+    return [...argoToasts(), ...(nativeOverlayOpen ? [] : onScreen.filter(note => note.id !== 'popup').map(note => note.element))]
+      .map(element => padded(element.getBoundingClientRect()));
+  }
+
+  /** @param {(ArgoNote & {element: Element})[]} onScreen */
+  function settleArgoNotes(onScreen) {
+    if (!explainingArgo()) return;
+    const areas = argoAreas(onScreen);
+    if (areas.length) {
+      const target = root.querySelector('.spotlight')?.getBoundingClientRect();
+      keepPanelClear(...(target ? [target] : []), ...areas);
+    }
+    const step = demoStepId();
+    for (const note of onScreen) {
+      const key = `${note.id}|${step}`;
+      if (heldNotes.has(key)) continue;
+      heldNotes.add(key);
+      if (view.mode === 'demonstration') holdDemoCountdown(argoNoticeReadDelay);
+    }
+  }
+
+  function updateArgoNotice() {
+    const before = argoNoticeMarkup();
+    const onScreen = syncArgoNotes();
+    if (argoNoticeMarkup() !== before) {
+      // Patch only this block: a full render would drop a highlight the demo is showing.
+      const slot = root.querySelector('[data-argo-notice]');
+      if (slot) {
+        slot.innerHTML = argoNoticeMarkup();
+        fitPanel();
+      }
+    }
+    settleArgoNotes(onScreen);
+  }
+
+  const nativeOverlayObserver = new MutationObserver(() => { updateNativeOverlay(); updateArgoNotice(); });
   nativeOverlayObserver.observe(document.body, {childList: true, subtree: true,
     attributes: true, attributeFilter: ['class', 'style', 'aria-hidden']});
   updateNativeOverlay();
@@ -299,6 +419,11 @@
         Date.parse(nextView.run_updated_at) < Date.parse(view.run_updated_at)) return;
     if (!view && !preserveMessage) { message = ''; error = false; }
     view = nextView;
+    // Argo can reload the page mid-run. Keep the cached view current so the
+    // coach resumes at this step instead of showing the first one until the
+    // next poll.
+    sessionStorage.setItem(initialViewKey, JSON.stringify(view, (key, value) =>
+      key === 'connection_token' ? undefined : value));
     if (view.feedback || ['FAILED', 'ABORTED'].includes(view.state)) {
       demoStopped = true;
       cancelDemoDelay();
@@ -417,6 +542,23 @@
     demoCountdown.deadline = performance.now() + demoCountdown.remaining;
     demoTimer = setTimeout(demoAdvance, demoCountdown.remaining);
     demoCountdownTicker = setInterval(updateDemoCountdown, 100);
+    updateDemoCountdown();
+  }
+
+  // Leave time to read an explanation that appears late in a countdown.
+  /** @param {number} duration */
+  function holdDemoCountdown(duration) {
+    if (!demoCountdown || !demoAdvance) return;
+    const remaining = demoCountdown.deadline === null ? demoCountdown.remaining :
+      Math.max(0, demoCountdown.deadline - performance.now());
+    if (remaining >= duration) return;
+    demoCountdown.duration += duration - remaining;
+    demoCountdown.remaining = duration;
+    if (demoCountdown.deadline !== null) {
+      demoCountdown.deadline = performance.now() + duration;
+      clearTimeout(demoTimer);
+      demoTimer = setTimeout(demoAdvance, duration);
+    }
     updateDemoCountdown();
   }
 
@@ -758,19 +900,67 @@
     </div></div>`;
   }
 
-  /** @param {Element} panel @param {number} x @param {number} y @param {boolean} [save] */
-  function positionCoach(panel, x, y, save = false) {
+  /** @param {Element} panel @param {number} x @param {number} y @returns {{x: number, y: number}} */
+  function clampPanel(panel, x, y) {
     const bounds = panel.getBoundingClientRect();
     const margin = 8;
-    panelPosition = {
+    return {
       x: Math.max(margin, Math.min(Math.round(x), Math.max(margin, innerWidth - bounds.width - margin))),
       y: Math.max(margin, Math.min(Math.round(y), Math.max(margin, innerHeight - bounds.height - margin))),
     };
-    panel.style.left = `${panelPosition.x}px`;
-    panel.style.top = `${panelPosition.y}px`;
-    panel.style.right = 'auto';
-    panel.style.bottom = 'auto';
+  }
+
+  /** @param {Element} panel @param {{x: number, y: number}} position */
+  function placePanel(panel, position) {
+    const {style} = /** @type {HTMLElement} */ (panel);
+    style.left = `${position.x}px`;
+    style.top = `${position.y}px`;
+    style.right = 'auto';
+    style.bottom = 'auto';
+  }
+
+  // Content can grow after the coach is placed; keep the whole panel on screen.
+  function fitPanel() {
+    const panel = root.querySelector('.panel');
+    const spot = clearPosition || panelPosition;
+    if (panel && spot) placePanel(panel, clampPanel(panel, spot.x, spot.y));
+  }
+
+  /** @param {Element} panel @param {number} x @param {number} y @param {boolean} [save] */
+  function positionCoach(panel, x, y, save = false) {
+    panelPosition = clampPanel(panel, x, y);
+    clearPosition = null;
+    placePanel(panel, panelPosition);
     if (save) sessionStorage.setItem(positionKey, JSON.stringify(panelPosition));
+  }
+
+  // The coach sits above Argo, so a control under it would be highlighted and
+  // clicked out of sight, and an Argo popup under it could not be read. Move
+  // the coach to the first corner that leaves every area visible, or failing
+  // that the first area, which is what the coach points at. Moving the coach,
+  // resizing the window, or an Argo drawer opening or closing returns it to
+  // its usual place.
+  /** @param {...{left: number, top: number, right: number, bottom: number}} areas */
+  function keepPanelClear(...areas) {
+    const panel = root.querySelector('.panel');
+    if (!panel || !areas.length) return;
+    const box = panel.getBoundingClientRect();
+    const gap = 12;
+    /** @param {{x: number, y: number}} spot @param {typeof areas} [avoid] */
+    const clear = (spot, avoid = areas) => !avoid.some(area => spot.x < area.right + gap &&
+      spot.x + box.width > area.left - gap && spot.y < area.bottom + gap && spot.y + box.height > area.top - gap);
+    const current = {x: box.left, y: box.top};
+    if (clear(current)) return;
+    const right = innerWidth - box.width - 20;
+    const bottom = innerHeight - box.height - gap;
+    const spots = [[right, 72], [right, bottom], [gap, bottom], [gap, 72]].map(([x, y]) => clampPanel(panel, x, y));
+    const pointedAt = areas.slice(0, 1);
+    const spot = spots.find(candidate => clear(candidate)) ||
+      (clear(current, pointedAt) ? null : spots.find(candidate => clear(candidate, pointedAt)));
+    if (!spot) return;
+    clearPosition = spot;
+    clearStep = demoStepId();
+    placePanel(panel, spot);
   }
 
   function render() {
@@ -805,6 +995,7 @@
     }
     if (view.feedback) pointer.removeAttribute('data-visible');
     syncClock();
+    const argoOnScreen = syncArgoNotes();
     const preparing = !['READY', 'INVESTIGATING', 'FIXED', 'COMPLETED', 'FAILED', 'ABORTED'].includes(view.state);
     if (debriefOpen) {
       const oldDebrief = root.querySelector('.debrief-modal');
@@ -845,7 +1036,10 @@
       : `${view.mode === 'demonstration' ? `<p class="driving">✦ Demo ${demoPaused ? 'paused' : 'running'}</p>` : ''}
          <h2>${escape(view.briefing?.headline || view.scenario.title)}</h2>
          ${view.alert ? `<div class="message error" role="alert">${escape(view.alert.message)}</div>` : ''}
-         ${checkInCard()} ${recentLearning ? learningCard() : checkCard()} ${demoPatchCard()} ${targetList()}
+         ${checkInCard()} ${recentLearning ? learningCard() : checkCard()}
+         <div data-argo-notice>${argoNoticeMarkup()}</div> ${demoPatchCard()} ${targetList()}
+         ${view.mode === 'demonstration' && view.fixed && view.scenario.level !== 1 && !view.feedback &&
+           view.checks_passed >= view.checks_total ? '<div class="actions"><button class="primary" data-action="note">Write incident note</button></div>' : ''}
          ${view.feedback || view.mode === 'demonstration' || recentLearning ? '' : view.mode === 'challenge' ? `<div class="actions"><button class="secondary" data-action="incident-info">Incident info</button>
            <button class="secondary" data-action="hint">Hint (assistance recorded)</button><button class="primary" data-action="note">Write incident note</button></div>` :
            `<div class="actions"><button class="secondary" data-action="incident-info">Incident info</button><button class="secondary" data-action="hint">Hint</button>
@@ -867,7 +1061,11 @@
       <button class="icon-button" data-action="collapse" aria-label="${collapsed ? 'Expand' : 'Collapse'} coach">${collapsed ? '▣' : '−'}</button></div>
       ${collapsed ? '' : `<div class="body">${body}${message ? `<div class="message ${error ? 'error' : ''}" role="status">${escape(message)}</div>` : ''}${view.mode === 'demonstration' && !exploring ? demoTimerMarkup() : ''}</div>`}
     </aside>${noteOpen ? noteForm() : ''}`;
-    if (panelPosition) positionCoach(root.querySelector('.panel'), panelPosition.x, panelPosition.y);
+    // A spot chosen for one step's highlight does not suit the next step.
+    if (clearPosition && clearStep !== demoStepId()) clearPosition = null;
+    if (clearPosition) fitPanel();
+    else if (panelPosition) positionCoach(root.querySelector('.panel'), panelPosition.x, panelPosition.y);
+    settleArgoNotes(argoOnScreen);
     for (const [id, value] of previousValues) {
       /** @type {HTMLInputElement | HTMLTextAreaElement} */
       const element = root.querySelector(`#${id}`);
@@ -996,6 +1194,45 @@
     'app.tree': '.application-resource-tree__node-title',
   };
 
+  // The short kind names Argo CD 3.5 shows under each resource tree node's icon.
+  const argoKindLabels = new Map([['ClusterRole', 'c-role'], ['ComponentStatus', 'cs'], ['ConfigMap', 'cm'],
+    ['ClusterRoleBinding', 'crb'], ['CustomResourceDefinition', 'crd'], ['CertificateSigningRequest', 'csr'],
+    ['CronJob', 'cronjob'], ['Deployment', 'deploy'], ['DaemonSet', 'ds'], ['Endpoint', 'ep'], ['Endpoints', 'ep'],
+    ['Event', 'ev'], ['Group', 'group'], ['HorizontalPodAutoscaler', 'hpa'], ['Ingress', 'ing'], ['Job', 'job'],
+    ['LimitRange', 'limits'], ['NetworkPolicy', 'netpol'], ['Namespace', 'ns'], ['Node', 'no'], ['Pod', 'pod'],
+    ['PodSecurityPolicy', 'psp'], ['PersistentVolume', 'pv'], ['PersistentVolumeClaim', 'pvc'],
+    ['PodDisruptionBudget', 'pdb'], ['PriorityClass', 'pc'], ['ReplicationController', 'rc'], ['ResourceQuota', 'quota'],
+    ['RoleBinding', 'rb'], ['Role', 'role'], ['ReplicaSet', 'rs'], ['ServiceAccount', 'sa'], ['StorageClass', 'sc'],
+    ['Secret', 'secret'], ['StatefulSet', 'sts'], ['Service', 'svc'], ['User', 'user'], ['Volume', 'vol']]);
+
+  /** @param {string} title An Argo CD 3.5 sidebar entry, such as Settings. */
+  const argoSidebarItem = title => Array.from(document.querySelectorAll('.sidebar__nav-item'))
+    .find(item => visible(item) && item.textContent?.trim() === title) || null;
+
+  /** @param {string} title A tile on Argo CD 3.5's Settings page, such as Repositories. */
+  const argoSettingsTile = title => Array.from(document.querySelectorAll('.settings-overview__redirect-panel'))
+    .find(tile => visible(tile) && tile.querySelector('.settings-overview__redirect-panel__title')?.textContent?.trim() === title) || null;
+
+  /**
+   * Polls for up to five seconds, as Argo renders the next page.
+   * @template T @param {() => T} find @returns {Promise<T | null>}
+   */
+  async function waitFor(find) {
+    for (let attempt = 0; attempt < 20 && !demoStopped; attempt += 1) {
+      const found = find();
+      if (found) return found;
+      await sleep(250);
+    }
+    return null;
+  }
+
+  // Argo CD 3.5 has no Conditions button. The App Conditions summary in the
+  // Application header, such as "1 Error", opens the panel in place.
+  function conditionsControl() {
+    return Array.from(document.querySelectorAll('.application-status-panel__conditions a')).find(visible) ||
+      Array.from(document.querySelectorAll('.application-status-panel__conditions')).find(visible) || null;
+  }
+
   /** @param {TargetId} target */
   async function waitForDemoContent(target) {
     const selector = demoContent[target];
@@ -1047,12 +1284,20 @@
     const top = Math.min(bounds.top, related?.top ?? bounds.top);
     const right = Math.max(bounds.right, related?.right ?? bounds.right);
     const bottom = Math.max(bounds.bottom, related?.bottom ?? bounds.bottom);
+    keepPanelClear({left: left - 4, top: top - 4, right: right + 4, bottom: bottom + 4}, ...argoAreas());
     const frame = document.createElement('div');
     frame.className = 'spotlight';
     Object.assign(frame.style, {left: `${left - 4}px`, top: `${top - 4}px`,
       width: `${right - left + 8}px`, height: `${bottom - top + 8}px`});
     root.append(frame);
-    setTimeout(() => frame.remove(), 5000);
+    // A click that opens another Argo page removes the element; drop its frame
+    // then rather than leaving it over the new page.
+    const shownAt = performance.now();
+    const watch = setInterval(() => {
+      if (element.isConnected && frame.isConnected && performance.now() - shownAt < 5000) return;
+      clearInterval(watch);
+      frame.remove();
+    }, 100);
   }
 
   // Scroll the nearest drawer or page first, then its parents. Native smooth
@@ -1165,7 +1410,8 @@
 
   /** @param {NextCheck} check */
   function evidenceElement(check) {
-    const exact = text => Array.from(document.querySelectorAll('body *')).find(element =>
+    /** @param {string} text @param {Element} [scope] */
+    const exact = (text, scope = document.body) => Array.from(scope.querySelectorAll('*')).find(element =>
       element.childElementCount === 0 && element.textContent?.trim() === text && visible(element));
     const selectors = {
       'app.operation': '.application-operation-state__message',
@@ -1174,6 +1420,14 @@
       'resource.events': '.resource-details__header',
       'resource.logs': '.resource-details__header',
       'resource.manifest': '.application-node-info__manifest, .application-node-info__manifest--raw',
+    };
+    // Argo's sidebar health filters use the same words as the header's App Health,
+    // which Argo CD 3.5 shows as an icon and the status in one value.
+    const headerHealth = () => {
+      const item = statusItem('APP HEALTH');
+      if (!item) return exact(view.health || '');
+      return Array.from(item.querySelectorAll('.application-status-panel__item-value'))
+        .find(value => visible(value) && value.textContent?.trim() === view.health) || null;
     };
     const history = check.target === 'app.history' && document.querySelector('.application-deployment-history');
     const answer = String(check.demonstration_answer || '').toLowerCase();
@@ -1192,7 +1446,7 @@
         element.textContent?.toLowerCase().includes(answer))
       .sort((a, b) => a.textContent.length - b.textContent.length)[0];
     return (check.target === 'apps.list' ? exact(view.application) : null) ||
-      (check.target === 'app.header' ? exact(view.health || '') : null) ||
+      (check.target === 'app.header' ? headerHealth() : null) ||
       (check.target === 'app.tree' && check.id !== 'ready-pod' ? exact(check.demonstration_answer || '') : null) ||
       historyRevision || answerMatch || history || (drawer !== document && visible(drawer) ? drawer : null) ||
       (check.target === 'settings.repos' ? candidate('gitea.applications.svc.cluster.local') : null) ||
@@ -1314,8 +1568,11 @@
         return indicateEvidence(check, true);
       }
       if (!location.pathname.endsWith('/applications')) {
-        narrateClick(check, 'Open the Applications list.');
-        location.href = '/argocd/applications';
+        const applications = demonstration && argoSidebarItem('Applications');
+        narrateClick(check, applications ? 'Open Applications in the Argo CD sidebar.' : 'Open the Applications list.');
+        if (applications && await activate(applications, true) &&
+            await waitFor(() => location.pathname.endsWith('/applications'))) return;
+        if (!demoStopped && !location.pathname.endsWith('/applications')) location.href = '/argocd/applications';
       }
       else if (demonstration) {
         observer.fromURL(location.href);
@@ -1337,19 +1594,48 @@
       return;
     }
     if (target === 'settings.repos') {
-      if (!/\/argocd\/settings\/repos(?:itories)?\/?$/.test(location.pathname)) {
+      const reposPage = /\/argocd\/settings\/repos(?:itories)?\/?$/;
+      const settingsPage = /\/argocd\/settings\/?$/;
+      if (demonstration && !reposPage.test(location.pathname)) {
+        // Go the way a person would: Settings in the sidebar, then the Repositories tile.
+        if (!settingsPage.test(location.pathname)) {
+          const settings = argoSidebarItem('Settings');
+          if (settings) {
+            narrateClick(check, 'Open Settings in the Argo CD sidebar.');
+            if (await activate(settings, true)) await waitFor(() => settingsPage.test(location.pathname));
+          }
+        }
+        const repositories = settingsPage.test(location.pathname) && await waitFor(() => argoSettingsTile('Repositories'));
+        if (repositories) {
+          narrateClick(check, 'Open Repositories in Settings.');
+          if (await activate(repositories, true)) await waitFor(() => reposPage.test(location.pathname));
+        }
+        if (demoStopped) return;
+      }
+      if (!reposPage.test(location.pathname)) {
         narrateClick(check, 'Open Settings → Repositories.');
         location.href = '/argocd/settings/repos';
       } else if (demonstration) {
-        const entry = evidenceElement(check);
+        // Argo fills in the repository list after the page opens.
+        const entry = await waitFor(() => evidenceElement(check));
         observer.fromURL(location.href);
         if (entry) return indicateEvidence(check, true);
       } else say(check.hint);
       return;
     }
     if (!location.pathname.includes(`/applications/argocd/${encodeURIComponent(view.application)}`)) {
-      const cardLabel = Array.from(document.querySelectorAll('body *')).find(element =>
+      const findCard = () => Array.from(document.querySelectorAll('body *')).find(element =>
         element.childElementCount === 0 && element.textContent?.trim() === view.application && visible(element));
+      let cardLabel = findCard();
+      // From another Argo page, such as Settings, a person returns through the sidebar.
+      if (!cardLabel && demonstration && !/\/argocd\/applications\/?$/.test(location.pathname)) {
+        const applications = argoSidebarItem('Applications');
+        if (applications) {
+          narrateClick(check, 'Open Applications in the Argo CD sidebar.');
+          if (await activate(applications, true)) cardLabel = await waitFor(findCard);
+          if (demoStopped) return;
+        }
+      }
       narrateClick(check, `Open the ${view.application} Application.`);
       if (cardLabel) { await activate(cardLabel, demonstration); return; }
       location.href = `/argocd/applications/argocd/${encodeURIComponent(view.application)}`;
@@ -1369,7 +1655,7 @@
       if (url.searchParams.get(name) !== value) {
         const label = {'app.history': 'History and Rollback', 'app.conditions': 'Conditions',
           'app.operation': 'Sync Status'}[target];
-        const control = exactControl(label) || candidate(label);
+        const control = (target === 'app.conditions' && conditionsControl()) || exactControl(label) || candidate(label);
         if (selectedControl(control)) return false;
         narrateClick(check, `Open ${label} on ${view.application}.`);
         if (demonstration && control) {
@@ -1461,9 +1747,13 @@
         for (let selection = 0; node && selection < 3; selection += 1) {
           if (!nodeSelected()) {
             // The tree often contains Service/django and Deployment/django.
-            // A name-only click can open the wrong resource and loop forever.
+            // A name-only click can open the wrong resource and loop forever,
+            // so also match the kind Argo shows under each node's icon.
+            const kind = argoKindLabels.get(node.kind) || node.kind.toLowerCase();
             const titles = Array.from(document.querySelectorAll('.application-resource-tree__node-title'))
-              .filter(element => visible(element) && element.textContent?.trim() === node.name);
+              .filter(element => visible(element) && element.textContent?.trim() === node.name)
+              .filter((element, _, named) => named.length === 1 || element.closest('.application-resource-tree__node')
+                ?.querySelector('.application-resource-tree__node-kind')?.textContent?.trim() === kind);
             if (titles.length === 1) {
               narrateClick(check, `Open ${node.kind}/${node.name} in ${view.application}'s Tree.`);
               await activate(titles[0], demonstration);
@@ -1617,14 +1907,67 @@
     await answerCheck(check.demonstration_answer);
   }
 
+  // Gitea 28 puts its page content in <div role="main">, not <main>.
   function gitPageTarget() {
     const missingName = view.scenario.id === 'missing-configmap' &&
-      Array.from(document.querySelectorAll('main code')).find(element =>
+      Array.from(document.querySelectorAll('main code, [role="main"] code')).find(element =>
         element.textContent?.includes('django-app-missing-config') && visible(element));
     if (missingName) return missingName;
     const path = view.fix_paths?.[0];
-    return path && Array.from(document.querySelectorAll('main a')).find(element =>
+    return path && Array.from(document.querySelectorAll('main a, [role="main"] a')).find(element =>
       element.textContent?.trim() === path && visible(element));
+  }
+
+  /**
+   * Types into one of the coach's own fields the way a person would, with the
+   * pointer on the field. A render replaces the field, so it is looked up again
+   * before each character; render() keeps the typed value.
+   * @param {string} selector @param {string} text
+   */
+  async function typeIntoField(selector, text) {
+    /** @type {() => HTMLInputElement | HTMLTextAreaElement | null} */
+    const field = () => root.querySelector(selector);
+    let pointed = false;
+    for (let attempt = 0; attempt < 3 && !pointed && !demoStopped && field(); attempt += 1) {
+      pointed = await pointAt(field());
+    }
+    if (!pointed || !field()) return false;
+    clearTimeout(pointerTimer);
+    pointer.dataset.visible = 'true';
+    field().focus({preventScroll: true});
+    field().value = '';
+    for (const char of text) {
+      while (demoPaused && !demoStopped) await sleep(200);
+      if (demoStopped || !field()) return false;
+      field().value += char;
+      await sleep(demoTypingDelay);
+    }
+    pointerTimer = setTimeout(() => { pointer.removeAttribute('data-visible'); }, 1200);
+    return true;
+  }
+
+  // Write the incident note as a learner does: open the form, type each field,
+  // then submit it.
+  /** @param {IncidentNote} values */
+  async function demonstrateNote(values) {
+    if (!noteOpen) {
+      const open = root.querySelector('[data-action="note"]');
+      if (open) await activate(open, true);
+      if (demoStopped) return;
+      // A render can replace the button while the pointer moves to it.
+      if (!noteOpen) { noteOpen = true; render(); }
+    }
+    for (const name of /** @type {(keyof IncidentNote)[]} */ (['resource', 'evidence', 'revision', 'cause', 'fix'])) {
+      if (!await typeIntoField(`#note-${name}`, values[name])) return;
+    }
+    // Click Submit again only if a render replaced it before the click landed.
+    for (let attempt = 0; attempt < 3 && !demoStopped && noteOpen; attempt += 1) {
+      const submitted = noteSubmissions;
+      const submit = root.querySelector('#note-form [type="submit"]');
+      if (!submit) return;
+      await activate(submit, true);
+      if (noteSubmissions !== submitted) return;
+    }
   }
 
   /** @param {string} path */
@@ -1737,13 +2080,18 @@
           navigateDemo(source);
         } else await performDemoFix(fixStep);
       } else if (view.fixed && view.checks_passed >= view.checks_total) {
-        say('Writing the incident note.');
-        await demoWait();
-        if (demoStopped) return;
+        if (!noteOpen) {
+          say('Writing the incident note.');
+          await demoWait();
+          if (demoStopped) return;
+        }
         /** @type {Partial<DemonstrationNote>} */
         const note = view.demonstration_note || {};
-        await submitNote({resource: note.resource || view.application, evidence: note.evidence || 'Healthy and Synced',
-          revision: note.revision || view.revision, cause: note.cause || 'No incident', fix: note.fix || 'No fix needed'});
+        const values = {resource: note.resource || view.application, evidence: note.evidence || 'Healthy and Synced',
+          revision: note.revision || view.revision, cause: note.cause || 'No incident', fix: note.fix || 'No fix needed'};
+        // Level 1 missions finish without a note form.
+        if (view.scenario.level === 1) await submitNote(values);
+        else await demonstrateNote(values);
       } else await refresh();
     } catch (reason) { say(reason.message, true); }
     finally {
@@ -1907,6 +2255,7 @@
     if (form.id === 'check-form') {
       answerCheck(/** @type {HTMLInputElement} */ (root.querySelector('#check-answer'))?.value || '');
     } else if (form.id === 'note-form') {
+      noteSubmissions += 1;
       // noteForm() renders one textarea for each IncidentNote field.
       submitNote(/** @type {IncidentNote} */ (/** @type {unknown} */ (Object.fromEntries(new FormData(form)))));
     }
@@ -1928,6 +2277,7 @@
   addEventListener('resize', () => {
     const panel = root.querySelector('.panel');
     if (panel && panelPosition) positionCoach(panel, panelPosition.x, panelPosition.y, true);
+    else if (clearPosition) { clearPosition = null; render(); }
   });
   addEventListener('pointerdown', () => stepClock.input(), {passive: true});
   addEventListener('keydown', () => stepClock.input(), {passive: true});

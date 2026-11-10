@@ -18,6 +18,7 @@ import secrets
 import struct
 import threading
 import time
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -240,6 +241,20 @@ def public_catalog():
                           for p in PACKS.values()]}
 
 
+def error_target(alternatives, probe):
+    """Of the places a check accepts, the one where Argo CD shows the error now.
+
+    A failed render appears in App Conditions; a rendered change that fails to
+    apply appears in Sync Status."""
+    status = probe.get("status") or {}
+    conditions = [condition.get("type", "") for condition in status.get("conditions") or []]
+    if "app.conditions" in alternatives and "ComparisonError" in conditions:
+        return "app.conditions"
+    if "app.operation" in alternatives and (status.get("operationState") or {}).get("phase") in {"Failed", "Error"}:
+        return "app.operation"
+    return alternatives[0]
+
+
 def next_check(session, probe):
     if session["mode"] == "challenge":
         return None
@@ -248,7 +263,8 @@ def next_check(session, probe):
         if check["id"] in session["passed"]:
             continue
         alternatives = check_targets(check)
-        target = next((item for item in alternatives if item in session["visited"]), alternatives[0])
+        target = next((item for item in alternatives if item in session["visited"]), None) or \
+            error_target(alternatives, probe)
         result = {"id": check["id"], "target": target, "where": TARGETS[target],
                 "question": expand(check["question"], context),
                 "hint": expand(check.get("hint", ""), context),
@@ -280,6 +296,28 @@ def all_checks(session, probe):
                                    "finding": "Argo deployed revision ${answer}."},
                        "requires_fixed": True})
     return [check for check in checks if not check.get("requires_fixed") or probe.get("fixed")]
+
+
+def argo_time(stamp):
+    try:
+        return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, ValueError):
+        return None
+
+
+def argo_compared_since(probe, push):
+    """Whether Argo CD has compared the Application again since this push.
+
+    Before that, its conditions still describe the previous commit. The push
+    requests a refresh, so while that refresh is pending, a comparison that
+    was already running when the push landed is not enough."""
+    if "argocd.argoproj.io/refresh" in (probe.get("annotations") or {}):
+        return False
+    compared = argo_time((probe.get("status") or {}).get("reconciledAt"))
+    before = argo_time(push.get("reconciled_before"))
+    if before is None:
+        before = push.get("at", 0)
+    return compared is not None and compared > before
 
 
 def session_view(session, run=None, probe=None, include_token=False):
@@ -341,7 +379,8 @@ def build_session_view(session, run, probe, include_token):
         expected_paths = set(view["fix_paths"])
         if expected_paths and not expected_paths.intersection(latest["details"].get("files", [])) and not probe.get("fixed"):
             view["alert"] = {"reason_code": "wrong_file_edited", "message": "That commit did not change the chart file Argo is using. Check the Desired manifest and source path."}
-        elif any(condition.get("type") == "ComparisonError" for condition in (probe.get("status") or {}).get("conditions") or []):
+        elif (argo_compared_since(probe, latest) and
+              any(condition.get("type") == "ComparisonError" for condition in (probe.get("status") or {}).get("conditions") or [])):
             view["alert"] = {"reason_code": "fix_broke_render", "message": "The new commit still has a ComparisonError. Read the Application condition before editing again."}
     if include_token:
         view["connection_token"] = session["token"]
@@ -576,12 +615,15 @@ def gitea_session_cookies():
     for cookie in issued_cookies:
         cookie.path = "/"
         jar.set_cookie(cookie)
+    # Gitea 28 dropped the form token and relies on cross-origin request checks,
+    # which a server-side login passes. Send the token only if the form has one.
+    form = {"user_name": GITEA_USER, "password": GITEA_PASSWORD}
     match = re.search(r'name=["\']_csrf["\'][^>]*value=["\']([^"\']+)', page)
     if not match:
         match = re.search(r'value=["\']([^"\']+)["\'][^>]*name=["\']_csrf["\']', page)
-    if not match:
-        raise ValueError("Gitea login form has no CSRF token")
-    body = urlencode({"user_name": GITEA_USER, "password": GITEA_PASSWORD, "_csrf": match.group(1)}).encode()
+    if match:
+        form["_csrf"] = match.group(1)
+    body = urlencode(form).encode()
     request = Request(GITEA_URL + "/user/login", data=body, method="POST",
                       headers={"Content-Type": "application/x-www-form-urlencoded"})
     try:
@@ -894,6 +936,18 @@ class Handler(BaseHTTPRequestHandler):
         if not hmac.compare_digest(given, expected):
             self.respond(401, {"error": "invalid webhook signature"})
             return
+        received = time.time()
+        with LOCK:
+            session = SESSIONS.get(ACTIVE_SESSION_ID)
+            run_id = session["run_id"] if session and session["feedback"] is None else None
+            application = session["application"] if run_id else None
+        reconciled_before = None
+        if application:
+            # Until Argo CD compares the Application again, its conditions still
+            # describe the previous commit. Note the last comparison before this
+            # push asks for a refresh.
+            _, before = controller("/probe?application=" + quote(application))
+            reconciled_before = (before.get("status") or {}).get("reconciledAt")
         if payload.get("ref") == "refs/heads/main" and payload.get("after"):
             status, result = controller("/api/refresh", "POST", {})
             if status >= 400:
@@ -908,12 +962,19 @@ class Handler(BaseHTTPRequestHandler):
         details = {"files": files, "sha": payload.get("after", ""),
                    "message": commits[-1].get("message", "") if commits else "",
                    "force": bool(payload.get("forced")), "via": "gitea"}
-        with LOCK:
-            session = SESSIONS.get(ACTIVE_SESSION_ID)
-            if session and session["feedback"] is None:
-                event = {"type": "commit_pushed", "details": details, "at": time.time()}
-                session["actions"].append(event)
-                log_event(session, event)
+        if run_id:
+            # The controller pushes the baseline reset and the injected fault
+            # before the run is ready. Those pushes are not the learner's commits.
+            _, run = controller("/api/runs/" + quote(run_id))
+            learner_push = (run.get("state") in {"READY", "INVESTIGATING", "FIXED"} and
+                            details["sha"] != run.get("trigger_revision"))
+            with LOCK:
+                session = SESSIONS.get(ACTIVE_SESSION_ID)
+                if learner_push and session and session["run_id"] == run_id and session["feedback"] is None:
+                    event = {"type": "commit_pushed", "details": details, "at": received,
+                             "reconciled_before": reconciled_before}
+                    session["actions"].append(event)
+                    log_event(session, event)
         self.respond(202, {"accepted": True})
 
     def do_DELETE(self):
