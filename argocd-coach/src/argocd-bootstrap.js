@@ -54,7 +54,12 @@
     dispatchEvent(new CustomEvent('argo-coach:' + kind, {detail: details}));
   }
 
-  /** @param {string} method @param {RequestInfo | URL} input @param {unknown} [body] */
+  /**
+   * Reports an Argo CD API request. A sync is reported once Argo CD answers,
+   * through the returned callback; every other request is reported at once.
+   * @param {string} method @param {RequestInfo | URL} input @param {unknown} [body]
+   * @returns {((accepted: boolean) => void) | undefined}
+   */
   function observeRequest(method, input, body) {
     let url;
     try { url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url, location.href); }
@@ -62,14 +67,22 @@
     if (url.origin !== location.origin || !url.pathname.includes('/api/v1/')) return;
     /** @type {CoachNetworkDetail} */
     const detail = {method: String(method || 'GET').toUpperCase(), path: url.pathname, search: url.search};
-    // Sync options are safe to observe; manifests, credentials and arbitrary
-    // request bodies are deliberately ignored.
-    if (detail.method === 'POST' && /\/sync$/.test(detail.path) && typeof body === 'string') {
-      try {
-        const options = JSON.parse(body);
-        detail.sync = {prune: Boolean(options.prune), dryRun: Boolean(options.dryRun),
-          resources: Array.isArray(options.resources) ? options.resources.map(item => ({kind: item.kind, name: item.name})) : []};
-      } catch (_) { /* Keep the semantic endpoint event. */ }
+    if (detail.method === 'POST' && /\/sync$/.test(detail.path)) {
+      // Sync options are safe to observe; manifests, credentials and arbitrary
+      // request bodies are deliberately ignored.
+      /** @type {NonNullable<CoachNetworkDetail['sync']>} */
+      const sync = {prune: false, dryRun: false, resources: []};
+      if (typeof body === 'string') {
+        try {
+          const options = JSON.parse(body);
+          Object.assign(sync, {prune: Boolean(options.prune), dryRun: Boolean(options.dryRun),
+            resources: Array.isArray(options.resources) ? options.resources.map(item => ({kind: item.kind, name: item.name})) : []});
+        } catch (_) { /* Keep the semantic endpoint event. */ }
+      }
+      // Argo CD refuses a sync while another operation is in progress, so its
+      // answer tells the learning service whether this sync collided with one.
+      // Asking Argo CD later would find the operation this sync just started.
+      return accepted => send('network', {...detail, sync: {...sync, accepted}});
     }
     send('network', detail);
   }
@@ -78,8 +91,10 @@
   if (originalFetch) {
     window.fetch = function (input, init) {
       // input may be a URL string, a URL or a Request; only a Request has a method.
-      observeRequest(init?.method || /** @type {Partial<Request>} */ (input)?.method || 'GET', input, init?.body);
-      return originalFetch.apply(this, arguments);
+      const answered = observeRequest(init?.method || /** @type {Partial<Request>} */ (input)?.method || 'GET', input, init?.body);
+      const response = originalFetch.apply(this, arguments);
+      if (answered) response.then(result => answered(result.ok), () => answered(false));
+      return response;
     };
   }
 
@@ -90,7 +105,9 @@
     return originalOpen.apply(this, arguments);
   };
   XMLHttpRequest.prototype.send = function (body) {
-    if (this.__argoCoachRequest) observeRequest(this.__argoCoachRequest.method, this.__argoCoachRequest.url, body);
+    const answered = this.__argoCoachRequest &&
+      observeRequest(this.__argoCoachRequest.method, this.__argoCoachRequest.url, body);
+    if (answered) this.addEventListener('loadend', () => answered(this.status >= 200 && this.status < 300), {once: true});
     return originalSend.apply(this, arguments);
   };
 

@@ -6,6 +6,8 @@ renders: preparing (the POST /api/runs response), investigating, verifying the
 fix, and completed with feedback. Extra samples cover each alert and an
 unreachable scenario controller.
 
+It also passes through the scenario controller's repair plans.
+
 `npm run typecheck:contract` in argocd-coach/ runs this and type-checks the
 output against argocd-coach/types/session-view.d.ts, so a field the server adds,
 drops, renames or retypes fails the check until the coach's types follow.
@@ -90,7 +92,7 @@ def scenario_samples(scenario, mode, environment):
     act(session, "step_demonstrated", target="app.history")
     act(session, "diff_viewed", application=session["application"])
     act(session, "sync_requested", application=session["application"], prune=False,
-        dryRun=False, resources=[])
+        dryRun=False, resources=[], accepted=True)
     act(session, "commit_pushed", files=list(pack["fix_paths"]), sha=FIXED,
         message="Repair the deployment", force=False, via="gitea")
     fixed = probe(fixed=True)
@@ -156,7 +158,13 @@ def samples():
     return new_views, views
 
 
-def typescript(new_views, views):
+def repair_plans():
+    """Real controller plans, kept current by the controller's TestRepairPlanSamplesAreCurrent."""
+    path = HERE.parent / "scenario-controller/internal/scenarios/testdata/repair-plans.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def typescript(new_views, views, plans):
     def record(value):
         return json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True)
     return "\n".join([
@@ -167,6 +175,8 @@ def typescript(new_views, views):
         "",
         f"export const sessionViews: Record<string, SessionView> = {record(views)};",
         "",
+        f"export const repairPlans: Record<string, RepairPlan> = {record(plans)};",
+        "",
     ])
 
 
@@ -176,8 +186,9 @@ def main():
     output = Path(sys.argv[1])
     output.parent.mkdir(parents=True, exist_ok=True)
     new_views, views = samples()
-    output.write_text(typescript(new_views, views), encoding="utf-8")
-    print(f"session_view_samples: wrote {len(new_views) + len(views)} views to {output}")
+    plans = repair_plans()
+    output.write_text(typescript(new_views, views, plans), encoding="utf-8")
+    print(f"session_view_samples: wrote {len(new_views) + len(views)} views and {len(plans)} repair plans to {output}")
 
 
 if __name__ == "__main__":

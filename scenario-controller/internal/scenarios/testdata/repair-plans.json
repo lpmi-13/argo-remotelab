@@ -1,0 +1,866 @@
+{
+  "env-drift · seed 4 · prod": {
+    "scenario": "env-drift",
+    "application": "shop-web-prod",
+    "chart_path": "chart/django-app",
+    "steps": [
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "Compare both environments' readiness paths, restore the prod path, then commit and push.",
+        "why": "The healthy environment shows the expected path, so only the affected environment's values file changes.",
+        "commands": [
+          "grep -n 'path: /api/' chart/django-app*/values.yaml",
+          "sed -i 's|path: /api/legacy-health/|path: /api/health/|' chart/django-app/values.yaml",
+          "git diff",
+          "git commit -am 'fix: restore the prod readiness path'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app/values.yaml"
+      }
+    ]
+  },
+  "env-drift · seed 4 · staging": {
+    "scenario": "env-drift",
+    "application": "shop-web-staging",
+    "chart_path": "chart/django-app-staging",
+    "steps": [
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "Compare both environments' readiness paths, restore the staging path, then commit and push.",
+        "why": "The healthy environment shows the expected path, so only the affected environment's values file changes.",
+        "commands": [
+          "grep -n 'path: /api/' chart/django-app*/values.yaml",
+          "sed -i 's|path: /api/legacy-health/|path: /api/health/|' chart/django-app-staging/values.yaml",
+          "git diff",
+          "git commit -am 'fix: restore the staging readiness path'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app-staging/values.yaml"
+      }
+    ]
+  },
+  "hmac-mismatch · seed 4 · prod": {
+    "scenario": "hmac-mismatch",
+    "application": "shop-web-prod",
+    "chart_path": "chart/django-app",
+    "steps": [
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "Read the team's known-good secrets, encrypt them over the broken file, check that it decrypts, then commit and push.",
+        "why": "A value's ciphertext fails authentication and cannot be decrypted, so encrypt the known-good values again.",
+        "commands": [
+          "cat /known-good/secrets.yaml",
+          "sops encrypt --input-type yaml --output-type yaml --output chart/django-app/secrets.yaml.enc /known-good/secrets.yaml",
+          "sops decrypt --input-type yaml --output-type yaml chart/django-app/secrets.yaml.enc",
+          "git diff --stat",
+          "git commit -am 'fix: re-encrypt the secrets from known-good values'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app/secrets.yaml.enc"
+      }
+    ]
+  },
+  "hmac-mismatch · seed 4 · staging": {
+    "scenario": "hmac-mismatch",
+    "application": "shop-web-staging",
+    "chart_path": "chart/django-app-staging",
+    "steps": [
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "Read the team's known-good secrets, encrypt them over the broken file, check that it decrypts, then commit and push.",
+        "why": "A value's ciphertext fails authentication and cannot be decrypted, so encrypt the known-good values again.",
+        "commands": [
+          "cat /known-good/secrets.yaml",
+          "sops encrypt --input-type yaml --output-type yaml --output chart/django-app-staging/secrets.yaml.enc /known-good/secrets.yaml",
+          "sops decrypt --input-type yaml --output-type yaml chart/django-app-staging/secrets.yaml.enc",
+          "git diff --stat",
+          "git commit -am 'fix: re-encrypt the secrets from known-good values'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app-staging/secrets.yaml.enc"
+      }
+    ]
+  },
+  "missing-configmap · seed 0 · prod": {
+    "scenario": "missing-configmap",
+    "application": "shop-web-prod",
+    "chart_path": "chart/django-app",
+    "steps": [
+      {
+        "id": "source",
+        "surface": "gitea",
+        "action": "view-source",
+        "what": "Open the Deployment template in Git and find the ConfigMap name the Pod could not load.",
+        "why": "The Pod's warning names django-app-missing-config; the template shows where the chart asks for it.",
+        "path": "chart/django-app/templates/deployment.yaml",
+        "find": "django-app-missing-config"
+      },
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "In the terminal, remove the reference to the missing ConfigMap, review the change, then commit and push it.",
+        "why": "Argo CD deploys what Git holds, so the repair must be a commit to survive the next sync.",
+        "commands": [
+          "grep -n django-app-missing-config chart/django-app/templates/deployment.yaml",
+          "sed -i 's|name: django-app-missing-config|name: {{ include \"django-app.fullname\" . }}-config|' chart/django-app/templates/deployment.yaml",
+          "git diff",
+          "git commit -am 'fix: restore the ConfigMap reference'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app/templates/deployment.yaml"
+      }
+    ]
+  },
+  "missing-configmap · seed 0 · staging": {
+    "scenario": "missing-configmap",
+    "application": "shop-web-staging",
+    "chart_path": "chart/django-app-staging",
+    "steps": [
+      {
+        "id": "source",
+        "surface": "gitea",
+        "action": "view-source",
+        "what": "Open the Deployment template in Git and find the ConfigMap name the Pod could not load.",
+        "why": "The Pod's warning names django-app-missing-config; the template shows where the chart asks for it.",
+        "path": "chart/django-app-staging/templates/deployment.yaml",
+        "find": "django-app-missing-config"
+      },
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "In the terminal, remove the reference to the missing ConfigMap, review the change, then commit and push it.",
+        "why": "Argo CD deploys what Git holds, so the repair must be a commit to survive the next sync.",
+        "commands": [
+          "grep -n django-app-missing-config chart/django-app-staging/templates/deployment.yaml",
+          "sed -i 's|name: django-app-missing-config|name: {{ include \"django-app.fullname\" . }}-config|' chart/django-app-staging/templates/deployment.yaml",
+          "git diff",
+          "git commit -am 'fix: restore the ConfigMap reference'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app-staging/templates/deployment.yaml"
+      }
+    ]
+  },
+  "missing-configmap · seed 1 · prod": {
+    "scenario": "missing-configmap",
+    "application": "shop-web-prod",
+    "chart_path": "chart/django-app",
+    "steps": [
+      {
+        "id": "source",
+        "surface": "gitea",
+        "action": "view-source",
+        "what": "Open the Deployment template in Git and find the ConfigMap name the Pod could not load.",
+        "why": "The Pod's warning names django-app-missing-config; the template shows where the chart asks for it.",
+        "path": "chart/django-app/templates/deployment.yaml",
+        "find": "django-app-missing-config"
+      },
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "In the terminal, remove the reference to the missing ConfigMap, review the change, then commit and push it.",
+        "why": "Argo CD deploys what Git holds, so the repair must be a commit to survive the next sync.",
+        "commands": [
+          "grep -n django-app-missing-config chart/django-app/templates/deployment.yaml",
+          "sed -i '/name: LAB_REQUIRED_CONFIG/,/key: APP_ENVIRONMENT/d' chart/django-app/templates/deployment.yaml",
+          "git diff",
+          "git commit -am 'fix: restore the ConfigMap reference'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app/templates/deployment.yaml"
+      }
+    ]
+  },
+  "missing-configmap · seed 1 · staging": {
+    "scenario": "missing-configmap",
+    "application": "shop-web-staging",
+    "chart_path": "chart/django-app-staging",
+    "steps": [
+      {
+        "id": "source",
+        "surface": "gitea",
+        "action": "view-source",
+        "what": "Open the Deployment template in Git and find the ConfigMap name the Pod could not load.",
+        "why": "The Pod's warning names django-app-missing-config; the template shows where the chart asks for it.",
+        "path": "chart/django-app-staging/templates/deployment.yaml",
+        "find": "django-app-missing-config"
+      },
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "In the terminal, remove the reference to the missing ConfigMap, review the change, then commit and push it.",
+        "why": "Argo CD deploys what Git holds, so the repair must be a commit to survive the next sync.",
+        "commands": [
+          "grep -n django-app-missing-config chart/django-app-staging/templates/deployment.yaml",
+          "sed -i '/name: LAB_REQUIRED_CONFIG/,/key: APP_ENVIRONMENT/d' chart/django-app-staging/templates/deployment.yaml",
+          "git diff",
+          "git commit -am 'fix: restore the ConfigMap reference'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app-staging/templates/deployment.yaml"
+      }
+    ]
+  },
+  "missing-configmap · seed 2 · prod": {
+    "scenario": "missing-configmap",
+    "application": "shop-web-prod",
+    "chart_path": "chart/django-app",
+    "steps": [
+      {
+        "id": "source",
+        "surface": "gitea",
+        "action": "view-source",
+        "what": "Open the Deployment template in Git and find the ConfigMap name the Pod could not load.",
+        "why": "The Pod's warning names django-app-missing-config; the template shows where the chart asks for it.",
+        "path": "chart/django-app/templates/deployment.yaml",
+        "find": "django-app-missing-config"
+      },
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "In the terminal, remove the reference to the missing ConfigMap, review the change, then commit and push it.",
+        "why": "Argo CD deploys what Git holds, so the repair must be a commit to survive the next sync.",
+        "commands": [
+          "grep -n django-app-missing-config chart/django-app/templates/deployment.yaml",
+          "sed -i '/^      volumes:$/,/name: django-app-missing-config/d' chart/django-app/templates/deployment.yaml",
+          "sed -i '/^        volumeMounts:$/,/mountPath: \\/etc\\/lab-required-config/d' chart/django-app/templates/deployment.yaml",
+          "git diff",
+          "git commit -am 'fix: restore the ConfigMap reference'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app/templates/deployment.yaml"
+      }
+    ]
+  },
+  "missing-configmap · seed 2 · staging": {
+    "scenario": "missing-configmap",
+    "application": "shop-web-staging",
+    "chart_path": "chart/django-app-staging",
+    "steps": [
+      {
+        "id": "source",
+        "surface": "gitea",
+        "action": "view-source",
+        "what": "Open the Deployment template in Git and find the ConfigMap name the Pod could not load.",
+        "why": "The Pod's warning names django-app-missing-config; the template shows where the chart asks for it.",
+        "path": "chart/django-app-staging/templates/deployment.yaml",
+        "find": "django-app-missing-config"
+      },
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "In the terminal, remove the reference to the missing ConfigMap, review the change, then commit and push it.",
+        "why": "Argo CD deploys what Git holds, so the repair must be a commit to survive the next sync.",
+        "commands": [
+          "grep -n django-app-missing-config chart/django-app-staging/templates/deployment.yaml",
+          "sed -i '/^      volumes:$/,/name: django-app-missing-config/d' chart/django-app-staging/templates/deployment.yaml",
+          "sed -i '/^        volumeMounts:$/,/mountPath: \\/etc\\/lab-required-config/d' chart/django-app-staging/templates/deployment.yaml",
+          "git diff",
+          "git commit -am 'fix: restore the ConfigMap reference'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app-staging/templates/deployment.yaml"
+      }
+    ]
+  },
+  "orphaned-resource · seed 4 · prod": {
+    "scenario": "orphaned-resource",
+    "application": "shop-web-prod",
+    "chart_path": "chart/django-app",
+    "steps": [
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "Restore the Deployment's name and the Service's selector, then commit and push.",
+        "why": "The Service must select the Pods the chart creates, and restoring the name makes django the desired Deployment again.",
+        "commands": [
+          "grep -n django-web chart/django-app/templates/deployment.yaml chart/django-app/templates/service.yaml",
+          "sed -i 's/^  name: django-web$/  name: django/' chart/django-app/templates/deployment.yaml",
+          "sed -i -e '/^    app.kubernetes.io\\/instance: /d' -e '/^    app.kubernetes.io\\/name: /d' -e 's#^    app: django-web$#    {{- include \"django-app.selectorLabels\" . | nindent 4 }}#' chart/django-app/templates/service.yaml",
+          "git diff",
+          "git commit -am 'fix: restore the Deployment name and Service selector'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app/templates/deployment.yaml"
+      },
+      {
+        "id": "diff",
+        "surface": "argo",
+        "action": "diff",
+        "what": "Open Diff and confirm the only resource left to remove is the django-web Deployment.",
+        "why": "A prune deletes live resources; Diff shows exactly what Git no longer contains.",
+        "resource": {
+          "group": "apps",
+          "kind": "Deployment",
+          "namespace": "applications",
+          "name": "django-web"
+        }
+      },
+      {
+        "id": "prune",
+        "surface": "argo",
+        "action": "prune",
+        "what": "Sync with Prune, selecting only the django-web Deployment.",
+        "why": "A targeted prune removes the leftover workload without touching the Deployment serving traffic.",
+        "resource": {
+          "group": "apps",
+          "kind": "Deployment",
+          "namespace": "applications",
+          "name": "django-web"
+        }
+      }
+    ]
+  },
+  "orphaned-resource · seed 4 · staging": {
+    "scenario": "orphaned-resource",
+    "application": "shop-web-staging",
+    "chart_path": "chart/django-app-staging",
+    "steps": [
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "Restore the Deployment's name and the Service's selector, then commit and push.",
+        "why": "The Service must select the Pods the chart creates, and restoring the name makes django the desired Deployment again.",
+        "commands": [
+          "grep -n django-web chart/django-app-staging/templates/deployment.yaml chart/django-app-staging/templates/service.yaml",
+          "sed -i 's/^  name: django-web$/  name: django/' chart/django-app-staging/templates/deployment.yaml",
+          "sed -i -e '/^    app.kubernetes.io\\/instance: /d' -e '/^    app.kubernetes.io\\/name: /d' -e 's#^    app: django-web$#    {{- include \"django-app.selectorLabels\" . | nindent 4 }}#' chart/django-app-staging/templates/service.yaml",
+          "git diff",
+          "git commit -am 'fix: restore the Deployment name and Service selector'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app-staging/templates/deployment.yaml"
+      },
+      {
+        "id": "diff",
+        "surface": "argo",
+        "action": "diff",
+        "what": "Open Diff and confirm the only resource left to remove is the django-web Deployment.",
+        "why": "A prune deletes live resources; Diff shows exactly what Git no longer contains.",
+        "resource": {
+          "group": "apps",
+          "kind": "Deployment",
+          "namespace": "shop-staging",
+          "name": "django-web"
+        }
+      },
+      {
+        "id": "prune",
+        "surface": "argo",
+        "action": "prune",
+        "what": "Sync with Prune, selecting only the django-web Deployment.",
+        "why": "A targeted prune removes the leftover workload without touching the Deployment serving traffic.",
+        "resource": {
+          "group": "apps",
+          "kind": "Deployment",
+          "namespace": "shop-staging",
+          "name": "django-web"
+        }
+      }
+    ]
+  },
+  "repo-auth · seed 4 · prod": {
+    "scenario": "repo-auth",
+    "application": "shop-web-prod",
+    "chart_path": "",
+    "steps": [
+      {
+        "id": "repo-url",
+        "surface": "argo",
+        "action": "set-repo-url",
+        "what": "Open shop-web-prod's Details, edit its Source, and set Repo URL to the working Gitea address.",
+        "why": "Settings → Repositories lists this authenticated HTTP URL; the SSH URL has no deploy key.",
+        "value": "http://gitea.applications.svc.cluster.local:3000/remotelab/django-app.git"
+      },
+      {
+        "id": "refresh",
+        "surface": "argo",
+        "action": "refresh",
+        "what": "Refresh shop-web-prod so Argo CD fetches from the restored URL.",
+        "why": "A refresh compares the Application now instead of at the next poll."
+      }
+    ]
+  },
+  "repo-auth · seed 4 · staging": {
+    "scenario": "repo-auth",
+    "application": "shop-web-staging",
+    "chart_path": "",
+    "steps": [
+      {
+        "id": "repo-url",
+        "surface": "argo",
+        "action": "set-repo-url",
+        "what": "Open shop-web-staging's Details, edit its Source, and set Repo URL to the working Gitea address.",
+        "why": "Settings → Repositories lists this authenticated HTTP URL; the SSH URL has no deploy key.",
+        "value": "http://gitea.applications.svc.cluster.local:3000/remotelab/django-app.git"
+      },
+      {
+        "id": "refresh",
+        "surface": "argo",
+        "action": "refresh",
+        "what": "Refresh shop-web-staging so Argo CD fetches from the restored URL.",
+        "why": "A refresh compares the Application now instead of at the next poll."
+      }
+    ]
+  },
+  "sops-decrypt-failure · seed 4 · prod": {
+    "scenario": "sops-decrypt-failure",
+    "application": "shop-web-prod",
+    "chart_path": "chart/django-app",
+    "steps": [
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "Read the team's known-good secrets, encrypt them over the broken file, check that it decrypts, then commit and push.",
+        "why": "The file's data key is damaged, so none of its values can be recovered; a fresh encryption replaces it.",
+        "commands": [
+          "cat /known-good/secrets.yaml",
+          "sops encrypt --input-type yaml --output-type yaml --output chart/django-app/secrets.yaml.enc /known-good/secrets.yaml",
+          "sops decrypt --input-type yaml --output-type yaml chart/django-app/secrets.yaml.enc",
+          "git diff --stat",
+          "git commit -am 'fix: re-encrypt the secrets from known-good values'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app/secrets.yaml.enc"
+      }
+    ]
+  },
+  "sops-decrypt-failure · seed 4 · staging": {
+    "scenario": "sops-decrypt-failure",
+    "application": "shop-web-staging",
+    "chart_path": "chart/django-app-staging",
+    "steps": [
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "Read the team's known-good secrets, encrypt them over the broken file, check that it decrypts, then commit and push.",
+        "why": "The file's data key is damaged, so none of its values can be recovered; a fresh encryption replaces it.",
+        "commands": [
+          "cat /known-good/secrets.yaml",
+          "sops encrypt --input-type yaml --output-type yaml --output chart/django-app-staging/secrets.yaml.enc /known-good/secrets.yaml",
+          "sops decrypt --input-type yaml --output-type yaml chart/django-app-staging/secrets.yaml.enc",
+          "git diff --stat",
+          "git commit -am 'fix: re-encrypt the secrets from known-good values'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app-staging/secrets.yaml.enc"
+      }
+    ]
+  },
+  "sops-global-mac-mismatch · seed 4 · prod": {
+    "scenario": "sops-global-mac-mismatch",
+    "application": "shop-web-prod",
+    "chart_path": "chart/django-app",
+    "steps": [
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "Recover the values with --ignore-mac, re-encrypt them to write a fresh MAC, check that it decrypts, then commit and push.",
+        "why": "Only the file's integrity record is wrong; the encrypted values still decrypt.",
+        "commands": [
+          "sops decrypt --ignore-mac --input-type yaml --output-type yaml chart/django-app/secrets.yaml.enc | sops encrypt --input-type yaml --output-type yaml --output chart/django-app/secrets.yaml.enc /dev/stdin",
+          "sops decrypt --input-type yaml --output-type yaml chart/django-app/secrets.yaml.enc",
+          "git diff --stat",
+          "git commit -am 'fix: re-encrypt the secrets with a fresh MAC'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app/secrets.yaml.enc"
+      }
+    ]
+  },
+  "sops-global-mac-mismatch · seed 4 · staging": {
+    "scenario": "sops-global-mac-mismatch",
+    "application": "shop-web-staging",
+    "chart_path": "chart/django-app-staging",
+    "steps": [
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "Recover the values with --ignore-mac, re-encrypt them to write a fresh MAC, check that it decrypts, then commit and push.",
+        "why": "Only the file's integrity record is wrong; the encrypted values still decrypt.",
+        "commands": [
+          "sops decrypt --ignore-mac --input-type yaml --output-type yaml chart/django-app-staging/secrets.yaml.enc | sops encrypt --input-type yaml --output-type yaml --output chart/django-app-staging/secrets.yaml.enc /dev/stdin",
+          "sops decrypt --input-type yaml --output-type yaml chart/django-app-staging/secrets.yaml.enc",
+          "git diff --stat",
+          "git commit -am 'fix: re-encrypt the secrets with a fresh MAC'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app-staging/secrets.yaml.enc"
+      }
+    ]
+  },
+  "stale-job · seed 4 · prod": {
+    "scenario": "stale-job",
+    "application": "shop-web-prod",
+    "chart_path": "chart/django-app",
+    "steps": [
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "Remove the failing step from the migration hook, restore its retry limit and the Deployment's annotations, then commit and push.",
+        "why": "The PreSync Job runs before each sync, and it must succeed before Argo CD updates the Deployment.",
+        "commands": [
+          "grep -n -e 'dependency check' -e backoffLimit chart/django-app/templates/migrate-job.yaml",
+          "sed -i -e '/migration dependency check failed/,/exit 1/d' -e 's/backoffLimit: 0/backoffLimit: 3/' chart/django-app/templates/migrate-job.yaml",
+          "sed -i '/stale-job-trigger/d' chart/django-app/templates/deployment.yaml",
+          "git diff",
+          "git commit -am 'fix: repair the migration hook'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app/templates/migrate-job.yaml"
+      },
+      {
+        "id": "terminate",
+        "surface": "argo",
+        "action": "terminate-operation",
+        "what": "Open Sync Status and terminate the running operation.",
+        "why": "Argo CD keeps retrying the failed sync of the old revision, and it starts no sync of the fix until that operation ends.",
+        "when": "operation-running"
+      },
+      {
+        "id": "sync",
+        "surface": "argo",
+        "action": "sync",
+        "what": "Sync shop-web-prod so the repaired PreSync Job runs.",
+        "why": "Argo CD records the hook's failure; a new sync runs the Job again from the repaired template.",
+        "when": "not-fixed"
+      }
+    ]
+  },
+  "stale-job · seed 4 · staging": {
+    "scenario": "stale-job",
+    "application": "shop-web-staging",
+    "chart_path": "chart/django-app-staging",
+    "steps": [
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "Remove the failing step from the migration hook, restore its retry limit and the Deployment's annotations, then commit and push.",
+        "why": "The PreSync Job runs before each sync, and it must succeed before Argo CD updates the Deployment.",
+        "commands": [
+          "grep -n -e 'dependency check' -e backoffLimit chart/django-app-staging/templates/migrate-job.yaml",
+          "sed -i -e '/migration dependency check failed/,/exit 1/d' -e 's/backoffLimit: 0/backoffLimit: 3/' chart/django-app-staging/templates/migrate-job.yaml",
+          "sed -i '/stale-job-trigger/d' chart/django-app-staging/templates/deployment.yaml",
+          "git diff",
+          "git commit -am 'fix: repair the migration hook'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app-staging/templates/migrate-job.yaml"
+      },
+      {
+        "id": "terminate",
+        "surface": "argo",
+        "action": "terminate-operation",
+        "what": "Open Sync Status and terminate the running operation.",
+        "why": "Argo CD keeps retrying the failed sync of the old revision, and it starts no sync of the fix until that operation ends.",
+        "when": "operation-running"
+      },
+      {
+        "id": "sync",
+        "surface": "argo",
+        "action": "sync",
+        "what": "Sync shop-web-staging so the repaired PreSync Job runs.",
+        "why": "Argo CD records the hook's failure; a new sync runs the Job again from the repaired template.",
+        "when": "not-fixed"
+      }
+    ]
+  },
+  "stuck-sync · seed 4 · prod": {
+    "scenario": "stuck-sync",
+    "application": "shop-web-prod",
+    "chart_path": "chart/django-app",
+    "steps": [
+      {
+        "id": "terminate",
+        "surface": "argo",
+        "action": "terminate-operation",
+        "what": "Open Sync Status and terminate the running operation.",
+        "why": "The operation waits for Pods that can never become ready, and it blocks a sync of the fix.",
+        "when": "operation-running"
+      },
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "Restore the readiness probe path and the post-sync setting in values.yaml, then commit and push.",
+        "why": "Pods only become ready when the probe calls a real endpoint; the change must be in Git for Argo CD to keep it.",
+        "commands": [
+          "grep -n -e 'path: /api/' -e postSyncVerify chart/django-app/values.yaml",
+          "sed -i -e 's|path: /api/nonexistent/|path: /api/health/|' -e 's|postSyncVerify: true|postSyncVerify: false|' chart/django-app/values.yaml",
+          "git diff",
+          "git commit -am 'fix: restore the readiness probe path'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app/values.yaml"
+      }
+    ]
+  },
+  "stuck-sync · seed 4 · staging": {
+    "scenario": "stuck-sync",
+    "application": "shop-web-staging",
+    "chart_path": "chart/django-app-staging",
+    "steps": [
+      {
+        "id": "terminate",
+        "surface": "argo",
+        "action": "terminate-operation",
+        "what": "Open Sync Status and terminate the running operation.",
+        "why": "The operation waits for Pods that can never become ready, and it blocks a sync of the fix.",
+        "when": "operation-running"
+      },
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "Restore the readiness probe path and the post-sync setting in values.yaml, then commit and push.",
+        "why": "Pods only become ready when the probe calls a real endpoint; the change must be in Git for Argo CD to keep it.",
+        "commands": [
+          "grep -n -e 'path: /api/' -e postSyncVerify chart/django-app-staging/values.yaml",
+          "sed -i -e 's|path: /api/nonexistent/|path: /api/health/|' -e 's|postSyncVerify: true|postSyncVerify: false|' chart/django-app-staging/values.yaml",
+          "git diff",
+          "git commit -am 'fix: restore the readiness probe path'",
+          "git push"
+        ]
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app-staging/values.yaml"
+      }
+    ]
+  },
+  "wrong-type-sops · seed 4 · prod": {
+    "scenario": "wrong-type-sops",
+    "application": "shop-web-prod",
+    "chart_path": "chart/django-app",
+    "steps": [
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "Read the team's known-good secrets, encrypt them over the broken file, check that it decrypts, then commit and push.",
+        "why": "The chart expects secrets to be a map of names to values, which the known-good file has.",
+        "commands": [
+          "cat /known-good/secrets.yaml",
+          "sops encrypt --input-type yaml --output-type yaml --output chart/django-app/secrets.yaml.enc /known-good/secrets.yaml",
+          "sops decrypt --input-type yaml --output-type yaml chart/django-app/secrets.yaml.enc",
+          "git diff --stat",
+          "git commit -am 'fix: re-encrypt the secrets from known-good values'",
+          "git push"
+        ]
+      },
+      {
+        "id": "terminate",
+        "surface": "argo",
+        "action": "terminate-operation",
+        "what": "Open Sync Status and terminate the running operation.",
+        "why": "Argo CD keeps retrying the broken revision while that operation runs; ending it lets Argo sync the fix.",
+        "when": "operation-running"
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app/secrets.yaml.enc"
+      }
+    ]
+  },
+  "wrong-type-sops · seed 4 · staging": {
+    "scenario": "wrong-type-sops",
+    "application": "shop-web-staging",
+    "chart_path": "chart/django-app-staging",
+    "steps": [
+      {
+        "id": "terminal",
+        "surface": "terminal",
+        "action": "run-commands",
+        "what": "Read the team's known-good secrets, encrypt them over the broken file, check that it decrypts, then commit and push.",
+        "why": "The chart expects secrets to be a map of names to values, which the known-good file has.",
+        "commands": [
+          "cat /known-good/secrets.yaml",
+          "sops encrypt --input-type yaml --output-type yaml --output chart/django-app-staging/secrets.yaml.enc /known-good/secrets.yaml",
+          "sops decrypt --input-type yaml --output-type yaml chart/django-app-staging/secrets.yaml.enc",
+          "git diff --stat",
+          "git commit -am 'fix: re-encrypt the secrets from known-good values'",
+          "git push"
+        ]
+      },
+      {
+        "id": "terminate",
+        "surface": "argo",
+        "action": "terminate-operation",
+        "what": "Open Sync Status and terminate the running operation.",
+        "why": "Argo CD keeps retrying the broken revision while that operation runs; ending it lets Argo sync the fix.",
+        "when": "operation-running"
+      },
+      {
+        "id": "commit",
+        "surface": "gitea",
+        "action": "view-commit",
+        "what": "Open the file in Git, then its latest commit, which is the one just pushed.",
+        "why": "The commit is the reviewable record of the repair, and the revision Argo CD should deploy next.",
+        "path": "chart/django-app-staging/secrets.yaml.enc"
+      }
+    ]
+  }
+}

@@ -378,6 +378,22 @@ class LearningServiceTests(unittest.TestCase):
                                           "details": {"application": "shop-web-prod"}}, running)
         self.assertEqual(busy["reason_code"], "sync_while_running")
         self.assertTrue(run["actions"][1]["details"]["operation_running"])
+        refused = server.record_action(run, {"sequence": 3, "type": "sync_requested",
+                                             "details": {"application": "shop-web-prod", "accepted": False}}, running)
+        self.assertEqual(refused["reason_code"], "sync_while_running")
+
+    def test_an_accepted_sync_is_not_blamed_for_the_operation_it_started(self):
+        # Argo CD refuses a sync while another operation runs, so the running
+        # operation the probe sees after an accepted sync is that sync's own.
+        run = session(mode="challenge")
+        running = probe()
+        running["operation_running"] = True
+        result = server.record_action(run, {"sequence": 1, "type": "sync_requested",
+                                            "details": {"application": "shop-web-prod", "accepted": True}}, running)
+        self.assertNotIn("reason_code", result)
+        self.assertNotIn("operation_running", run["actions"][0]["details"])
+        run["actions"].insert(0, {"type": "diff_viewed", "details": {"application": "shop-web-prod"}})
+        self.assertEqual(server.score(run, probe())["breakdown"]["operational_practice"], 10)
 
     def test_unsafe_prune_and_live_workload_delete_reduce_practice(self):
         run = session(name="orphaned-resource")
@@ -608,6 +624,33 @@ class LearningServiceTests(unittest.TestCase):
         self.assertEqual(run["visited"], set())
         self.assertIs(run["feedback"], feedback)
         self.assertFalse(any("/state" in str(call[0]) for call in calls))
+
+    def test_repair_plan_is_passed_through_for_demonstrations_only(self):
+        plan = {"scenario": "missing-configmap", "steps": [{"id": "terminal"}]}
+        for mode, expected in (("demonstration", (200, plan)), ("guided", (403, {"error": "demonstration only"})),
+                               ("challenge", (403, {"error": "demonstration only"}))):
+            run = session(mode=mode)
+            run["token"] = "session-token"
+            handler = object.__new__(server.Handler)
+            handler.path = "/api/sessions/test/repair-plan"
+            handler.headers = {"Authorization": "Bearer session-token"}
+            replies, calls = [], []
+            handler.respond = lambda status, body: replies.append((status, body))
+            with patch.dict(server.SESSIONS, {"test": run}, clear=True), \
+                 patch.object(server, "controller", side_effect=lambda *args: calls.append(args) or (200, plan)):
+                handler.do_GET()
+            self.assertEqual(replies, [expected], mode)
+            self.assertEqual(calls, [("/api/runs/run-test/repair-plan",)] if mode == "demonstration" else [], mode)
+
+    def test_demonstration_records_which_repair_step_fell_back(self):
+        run = session(mode="demonstration")
+        server.record_action(run, {"sequence": 1, "type": "demo_fallback",
+                                   "details": {"step": "prune", "reason": "Sync did not open"}}, probe(fixed=False))
+        self.assertEqual(run["actions"][0]["type"], "demo_fallback")
+        self.assertEqual(run["actions"][0]["details"]["step"], "prune")
+        with self.assertRaises(ValueError):
+            server.record_action(session(mode="guided"), {"sequence": 1, "type": "demo_fallback", "details": {}},
+                                 probe(fixed=False))
 
 
 if __name__ == "__main__":

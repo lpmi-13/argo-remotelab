@@ -15,6 +15,8 @@ __lab_command_verb() {
   printf '%s' "$verb"
 }
 
+__lab_prompt_count=0
+
 __lab_report_command() {
   local exit_code=$?
   local verb
@@ -24,6 +26,13 @@ __lab_report_command() {
     -H "X-Lab-Terminal-Token: ${LAB_TERMINAL_TOKEN:-}" \
     --data "{\"verb\":\"${verb}\",\"exit_code\":${exit_code}}" \
     "${LEARNING_SERVICE_URL:-http://learning-service:8091}/api/events/terminal" >/dev/null 2>&1 || true
+  # Title each prompt "lab-terminal <prompt count> <exit code> <HEAD>". ttyd
+  # copies the title into its page, where the coach reads it to learn that a
+  # command it typed has finished, how it exited and what was committed. The
+  # title stays in the browser; it is not sent anywhere.
+  __lab_prompt_count=$((__lab_prompt_count + 1))
+  printf '\033]0;lab-terminal %s %s %s\007' "$__lab_prompt_count" "$exit_code" \
+    "$(git rev-parse HEAD 2>/dev/null || printf -)"
 }
 PROMPT_COMMAND=__lab_report_command
 export PROMPT_COMMAND

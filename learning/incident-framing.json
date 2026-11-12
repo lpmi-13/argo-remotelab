@@ -203,7 +203,7 @@
         }
       },
       "repair": {
-        "action": "Re-encrypt the secret from known plaintext in the lab terminal, commit and push the encrypted file, then wait for Argo to compare it.",
+        "action": "Re-encrypt the known-good values in /known-good/secrets.yaml in the lab terminal, commit and push the encrypted file, then wait for Argo to compare it.",
         "reason": "A damaged encrypted data key cannot be repaired by retrying sync. A valid encrypted source lets manifest generation resume."
       }
     },
@@ -249,7 +249,7 @@
         }
       },
       "repair": {
-        "action": "Re-encrypt the known-good plaintext value in the terminal, commit the encrypted file, and let Argo compare the new revision.",
+        "action": "Re-encrypt the known-good values in /known-good/secrets.yaml in the terminal, commit the encrypted file, and let Argo compare the new revision.",
         "reason": "Authentication verifies the encrypted value itself. A retry or skipped integrity check cannot supply valid ciphertext."
       }
     },
@@ -272,7 +272,7 @@
         }
       },
       "repair": {
-        "action": "Re-encrypt a valid secrets map in the terminal, commit and push it; clear any failed operation so Argo can sync.",
+        "action": "Re-encrypt the valid secrets map in /known-good/secrets.yaml in the terminal, commit and push it; clear any failed operation so Argo can sync.",
         "reason": "The chart expects key-value secrets. Editing the encrypted source makes the corrected shape durable."
       }
     },

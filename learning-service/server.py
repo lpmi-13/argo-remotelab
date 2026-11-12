@@ -406,8 +406,10 @@ def record_action(session, action, probe):
                     "diff_viewed", "manifest_viewed", "history_viewed", "events_viewed", "logs_viewed",
                     "commit_pushed", "terminal_command", "resource_updated",
                     "hint_requested", "step_demonstrated", "check_in_answered",
-                    "refresh_requested", "file_edited_in_browser"}:
+                    "refresh_requested", "file_edited_in_browser", "demo_fallback"}:
         raise ValueError("unknown action type")
+    if kind == "demo_fallback" and session["mode"] != "demonstration":
+        raise ValueError("only a demonstration falls back to the reference repair")
     result = {"accepted": True}
     if kind == "target_visited":
         target = details.get("target")
@@ -437,11 +439,15 @@ def record_action(session, action, probe):
                        "message": expand(check["learning"], context_for(session, probe))
                        if correct else expand(check["hint"], context_for(session, probe))})
     elif kind in {"sync_requested", "operation_terminated", "resource_deleted", "rollback_requested", "resource_updated"}:
-        if kind == "sync_requested" and probe.get("operation_running"):
+        # The coach reports a sync after Argo CD answers it. Argo CD accepts a
+        # sync only when no other operation is in progress, so a running
+        # operation seen now is this sync's own unless Argo CD refused it.
+        collided = kind == "sync_requested" and probe.get("operation_running") and details.get("accepted") is not True
+        if collided:
             details["operation_running"] = True
         if details.get("application") != session["application"]:
             result.update({"reason_code": "wrong_app", "message": "This Application is outside the incident. Check its environment label before acting."})
-        elif kind == "sync_requested" and probe.get("operation_running"):
+        elif collided:
             result.update({"reason_code": "sync_while_running", "message": "An operation is already running. Read its status and terminate it before another sync."})
         elif kind == "resource_deleted" and session["pack"]["id"] == "orphaned-resource" and details.get("name") == "django":
             result.update({"reason_code": "deleted_live_workload", "message": "The live Deployment was deleted. Argo may recreate it; prune only the orphan after fixing the desired state."})
@@ -800,6 +806,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         if len(parts) == 4 and parts[:2] == ["api", "sessions"] and parts[3] == "stream":
             self.session_stream(parts[2])
+            return
+        if len(parts) == 4 and parts[:2] == ["api", "sessions"] and parts[3] == "repair-plan":
+            # The steps a Demonstration performs to repair the run, from the
+            # controller that injected its fault. Learners find their own repair.
+            session = self.session(parts[2])
+            if session:
+                if session["mode"] != "demonstration":
+                    self.respond(403, {"error": "demonstration only"})
+                    return
+                status, plan = controller("/api/runs/" + quote(session["run_id"]) + "/repair-plan")
+                self.respond(status, plan)
             return
         if len(parts) == 4 and parts[:2] == ["api", "sessions"] and parts[3] == "feedback":
             session = self.session(parts[2])

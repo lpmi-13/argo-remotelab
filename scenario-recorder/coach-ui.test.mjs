@@ -224,9 +224,12 @@ const showArgoPopup = (page, text = 'Unable to load data: revision main must be 
     css.textContent = '.Toastify__toast { visibility: hidden }';
     document.head.append(css);
   }
+  // react-toastify fixes its container in a corner, and each toast slides into it from off screen.
   const container = document.createElement('div');
   container.className = 'Toastify__toast-container Toastify__toast-container--bottom-right';
-  container.innerHTML = `<div class="Toastify__toast Toastify__toast--error" style="position: fixed; ${style}; width: 320px; height: 64px">
+  container.style.cssText = `position: fixed; ${style}; width: 320px`;
+  container.innerHTML = `<style>@keyframes toast-in { from { transform: translateX(120vw) } }</style>
+    <div class="Toastify__toast Toastify__toast--error" style="height: 64px; animation: toast-in .75s">
     <div class="Toastify__toast-body"><div><b>Unable to load data</b>: ${text.replace('Unable to load data: ', '')}</div></div>
     <button class="Toastify__close-button" aria-label="close"></button></div>`;
   document.body.append(container);
@@ -329,6 +332,30 @@ test('a popup the coach only finds while re-rendering still moves it, and the ne
       null, {timeout: 6000});
     const back = await panel.boundingBox();
     assert.deepEqual([back.x, back.y], [usual.x, usual.y], 'the coach is back in its usual corner');
+  } finally { await browser.close(); }
+});
+
+test('a popup sliding into the coach\'s corner moves the coach before it arrives', {timeout: 30000}, async () => {
+  const {browser, page} = await fixture('guided');
+  try {
+    await page.locator('#argocd-coach-host [data-action="begin"]').click();
+    // Every frame for 1.5 s, note whether the coach covers any part of the popup.
+    const covered = page.evaluate(() => new Promise(resolve => {
+      const frames = [];
+      const started = performance.now();
+      const tick = () => {
+        const toast = document.querySelector('.Toastify__toast')?.getBoundingClientRect();
+        const coach = document.querySelector('#argocd-coach-host').shadowRoot.querySelector('.panel').getBoundingClientRect();
+        if (toast && coach.left < toast.right && coach.right > toast.left && coach.top < toast.bottom && coach.bottom > toast.top) {
+          frames.push(Math.round(performance.now() - started));
+        }
+        if (performance.now() - started < 1500) requestAnimationFrame(tick);
+        else resolve(frames);
+      };
+      requestAnimationFrame(tick);
+    }));
+    await showArgoPopup(page);
+    assert.deepEqual(await covered, [], 'the coach never covers the popup while it slides in');
   } finally { await browser.close(); }
 });
 
@@ -1350,21 +1377,208 @@ test('terminal button follows the mission repair surface and mode', {timeout: 30
   } finally { await browser.close(); }
 });
 
-test('demonstration shows the broken Git source and real commit before returning to Argo', {timeout: 30000}, async () => {
-  const trigger = 'a'.repeat(40);
-  const commit = 'b'.repeat(40);
-  const sourcePath = 'chart/django-app/templates/deployment.yaml';
-  const sourceURL = `/gitea/remotelab/django-app/src/commit/${trigger}/${sourcePath}`;
-  const commitURL = `/gitea/remotelab/django-app/commit/${commit}`;
-  const appURL = '/argocd/applications/argocd/shop-web-prod';
+// A lab for a demonstration's repair: an Argo CD Application page with the
+// controls the repair uses, Gitea's file and commit pages, and a ttyd page
+// whose shell the test scripts. Argo's form is React-like: it keeps its own
+// value and ignores changes it did not see through an input event.
+const repairApp = '/argocd/applications/argocd/shop-web-prod';
+const repairCoach = '<script src="/coach/assets/coach.js"></script>';
+
+const fakeArgoPage = `<!doctype html><html><head><meta charset="utf-8"><style>
+  body { margin: 0; font: 14px sans-serif } .toolbar { display: flex; gap: 8px; padding: 8px }
+  .sliding-panel { position: fixed; top: 0; left: 0; width: 640px; height: 100vh; background: #eee; overflow: auto;
+    transform: translateX(-100%); transition: transform .5s }
+  .sliding-panel--opened { transform: none }
+  .popup-overlay { position: fixed; inset: 0 } .popup-container { position: absolute; top: 260px; left: 300px; background: #fff; padding: 20px }
+</style></head><body>
+<div class="toolbar"><button class="argo-button" data-panel="details">Details</button>
+  <button class="argo-button" data-panel="diff">Diff</button><button class="argo-button" data-panel="sync">Sync</button>
+  <button class="argo-button" data-panel="status">Sync Status</button>
+  <div class="argo-split-button"><button class="argo-split-button__primary">Refresh</button></div></div>
+<div class="application-status-panel"><div class="application-status-panel__item">APP HEALTH Degraded</div></div>
+<div class="application-resource-tree__node-title">django</div>
+<script>
+  const post = (path, body = {}) => fetch(path, {method: 'POST', body: JSON.stringify(body)});
+  const application = async () => (await fetch('/argocd/api/v1/applications/shop-web-prod?appNamespace=argocd')).json();
+  const close = () => document.querySelectorAll('.sliding-panel--opened').forEach(panel => panel.remove());
+  function panel(html) {
+    close();
+    const element = document.createElement('div');
+    element.className = 'sliding-panel';
+    element.innerHTML = '<button class="sliding-panel__close">x</button>' + html;
+    element.querySelector('.sliding-panel__close').onclick = close;
+    document.body.append(element);
+    element.getBoundingClientRect();
+    element.classList.add('sliding-panel--opened');
+    return element;
+  }
+  // React keeps a controlled input's value in state and tracks what was last
+  // assigned to the element. An input event whose value matches what was
+  // assigned is not a change, and after every event the state is shown again.
+  function controlledInput(initial, onChange) {
+    const input = document.createElement('input');
+    input.className = 'argo-field';
+    const native = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    let state = initial, tracked = initial;
+    native.set.call(input, initial);
+    Object.defineProperty(input, 'value', {get: () => native.get.call(input), set: value => { tracked = value; native.set.call(input, value); }});
+    input.addEventListener('input', () => {
+      const current = native.get.call(input);
+      if (current !== tracked) { tracked = current; state = current; onChange(state); }
+      native.set.call(input, state);
+      tracked = state;
+    });
+    return input;
+  }
+  const open = {
+    async details() {
+      let url = (await application()).spec.source.repoURL;
+      const element = panel('<div class="white-box editable-panel"><div class="editable-panel__buttons"></div><p>SOURCE</p>' +
+        '<div class="row white-box__details-row"><div class="columns small-3">REPO URL</div><div class="columns small-9"></div></div></div>');
+      const buttons = element.querySelector('.editable-panel__buttons');
+      const cell = element.querySelector('.columns.small-9');
+      const show = () => {
+        buttons.innerHTML = '<button class="argo-button">Edit</button>';
+        cell.innerHTML = '<span></span>';
+        cell.firstChild.textContent = url;
+        buttons.firstChild.onclick = edit;
+      };
+      const edit = () => {
+        let draft = url;
+        buttons.innerHTML = '<button class="argo-button">Save</button> <button class="argo-button">Cancel</button>';
+        cell.replaceChildren(controlledInput(url, value => { draft = value; }));
+        const [save, cancel] = buttons.querySelectorAll('button');
+        save.onclick = async () => { await post('/fake-argo/save', {repoURL: draft}); url = draft; show(); };
+        cancel.onclick = show;
+      };
+      show();
+    },
+    diff() {
+      panel('<div class="application-resources-diff"><h4>apps/Deployment/applications/django-web</h4><pre>- kind: Deployment</pre></div>');
+    },
+    async sync() {
+      const resources = (await application()).status.resources;
+      const element = panel('<button qe-id="application-sync-panel-button-synchronize" class="argo-button">Synchronize</button>' +
+        '<span class="argo-checkbox"><input id="sync-option-Prune-1" type="checkbox"></span><label for="sync-option-Prune-1">Prune</label>' +
+        '<span class="argo-checkbox"><input id="sync-option-PruneLast-application-sync-panel" type="checkbox"></span>' +
+        '<label for="sync-option-PruneLast-application-sync-panel">Prune Last</label>' +
+        '<label>Synchronize resources:</label><a>all</a> / <a>out of sync</a> / <a>none</a>' +
+        resources.map(item => { const id = [item.group || '', item.kind, item.namespace, item.name].join('/');
+          return '<div class="application-sync-panel__resource"><span class="argo-checkbox"><input id="' + id +
+            '" type="checkbox" checked></span><label for="' + id + '">' + id + '</label></div>'; }).join(''));
+      const boxes = () => Array.from(element.querySelectorAll('.application-sync-panel__resource input'));
+      const links = element.querySelectorAll('a');
+      links[0].onclick = () => boxes().forEach(box => { box.checked = true; });
+      links[2].onclick = () => boxes().forEach(box => { box.checked = false; });
+      const synchronize = async prune => {
+        await post('/fake-argo/sync', {prune, resources: boxes().filter(box => box.checked).map(box => box.id)});
+        close();
+      };
+      element.querySelector('[qe-id]').onclick = () => {
+        const prune = element.querySelector('#sync-option-Prune-1').checked;
+        if (!prune) return synchronize(false);
+        // Argo CD 3.5 asks for the word prune before a sync with Prune.
+        let typed = '';
+        const overlay = document.createElement('div');
+        overlay.className = 'popup-overlay';
+        // Argo CD's prune dialog is 1000px wide and centered, wider than a 1280px screen leaves beside the coach.
+        overlay.innerHTML = '<div class="popup-container" style="left: 140px; top: 203px; width: 1000px; height: 393px; box-sizing: border-box">' +
+          '<p>Prune resources?</p><div class="argo-form-row"></div>' +
+          '<button qe-id="prompt-popup-ok-button" class="argo-button">OK</button>' +
+          '<button qe-id="prompt-popup-cancel-button" class="argo-button">Cancel</button></div>';
+        // Where the coach is at each keystroke and at OK, beside the dialog.
+        const coachAt = () => {
+          const coach = document.querySelector('#argocd-coach-host').shadowRoot.querySelector('.panel').getBoundingClientRect();
+          return {left: coach.left, top: coach.top, right: coach.right, bottom: coach.bottom};
+        };
+        window.pruneCoach = [];
+        overlay.querySelector('.argo-form-row').append(controlledInput('', value => { typed = value; window.pruneCoach.push(coachAt()); }));
+        document.body.append(overlay);
+        overlay.querySelector('[qe-id="prompt-popup-ok-button"]').onclick = () => {
+          const dialog = overlay.querySelector('.popup-container').getBoundingClientRect();
+          window.pruneCoach.push(coachAt());
+          window.pruneConfirmed = {typed, coach: window.pruneCoach,
+            dialog: {left: dialog.left, top: dialog.top, right: dialog.right, bottom: dialog.bottom}};
+          if (typed !== 'prune') return;
+          overlay.remove();
+          return synchronize(true);
+        };
+      };
+    },
+    async status() {
+      const running = (await application()).status.operationState.phase === 'Running';
+      const element = panel('<div>OPERATION Sync</div>' + (running ? '<button class="argo-button">Terminate</button>' : '') +
+        '<div class="message">Running</div>');
+      element.querySelector('.argo-button')?.addEventListener('click', event => {
+        const pointer = document.querySelector('#argocd-coach-host').shadowRoot.querySelector('.coach-pointer');
+        const box = event.target.getBoundingClientRect();
+        window.terminateClick = {x: parseFloat(pointer.style.left), y: parseFloat(pointer.style.top),
+          box: {left: box.left, top: box.top, right: box.right, bottom: box.bottom}};
+        const overlay = document.createElement('div');
+        overlay.className = 'popup-overlay';
+        overlay.innerHTML = '<div class="popup-container"><p>Are you sure you want to terminate operation?</p>' +
+          '<button qe-id="argo-popup-ok-button" class="argo-button">OK</button><button qe-id="argo-popup-cancel-button" class="argo-button">Cancel</button></div>';
+        document.body.append(overlay);
+        overlay.querySelector('[qe-id="argo-popup-ok-button"]').onclick = async () => {
+          overlay.remove();
+          await post('/fake-argo/terminate');
+          element.querySelector('.message').textContent = 'Operation terminated';
+        };
+      });
+    },
+  };
+  document.querySelectorAll('[data-panel]').forEach(button => { button.onclick = () => open[button.dataset.panel](); });
+  document.querySelector('.argo-split-button__primary').onclick = () => post('/fake-argo/refresh');
+</script>${repairCoach}</body></html>`;
+
+// ttyd's page: xterm.js as window.term, and the prompt title lab-terminal/telemetry.sh sets.
+const fakeTerminalPage = `<!doctype html><html><head><meta charset="utf-8"><title>ttyd</title>
+<style>body { margin: 0 } .xterm-screen { width: 800px; height: 450px; font: 12px monospace; white-space: pre }</style></head>
+<body><div class="xterm-screen" id="screen"></div><script>
+  const lines = ['$ '];
+  let command = '', count = 1, head = 'a'.repeat(40);
+  const show = () => { document.querySelector('#screen').textContent = lines.slice(-30).join('\\n'); };
+  const title = exit => { document.title = 'lab-terminal ' + count + ' ' + exit + ' ' + head + ' | ttyd'; };
+  window.term = {
+    cols: 100, rows: 30, element: document.body, typed: [], focus() {},
+    input(data) {
+      this.typed.push(data);
+      if (data !== '\\r') { command += data; lines[lines.length - 1] += data; show(); return; }
+      const ran = command;
+      command = '';
+      fetch('/fake-terminal/run', {method: 'POST', body: ran}).then(response => response.json()).then(result => {
+        lines.push(...result.output, '$ ');
+        head = result.head || head;
+        count += 1;
+        title(result.exit);
+        show();
+      });
+    },
+    buffer: {active: {baseY: 0, get cursorX() { return lines.at(-1).length; }, get cursorY() { return lines.length - 1; },
+      getLine: row => row < lines.length ? {isWrapped: false, translateToString: () => lines[row]} : undefined}},
+  };
+  title(0);
+  show();
+</script></body></html>`;
+
+/**
+ * Serves a demonstration whose next step is the repair in plan.
+ * @param {{plan: object, shell?: (command: string) => {exit?: number, output?: string[]}, argo?: object, fixSurface?: string}} options
+ */
+async function repairFixture({plan, shell = () => ({}), argo: argoState = {}, fixSurface = 'git'}) {
+  const path = 'chart/django-app/templates/deployment.yaml';
+  const pushed = 'c'.repeat(40);
   const browser = await launchBrowser();
-  const page = await browser.newPage({viewport: {width: 1200, height: 750}, reducedMotion: 'reduce'});
-  let fixCalls = 0;
+  const page = await browser.newPage({viewport: {width: 1280, height: 800}});
+  const calls = {commands: [], actions: [], fixes: 0, argo: []};
+  const argo = {phase: 'Succeeded', startedAt: 'start-0', revision: '', repoURL: 'ssh://git@gitea/remotelab/django-app.git',
+    resources: [{group: '', kind: 'Service', namespace: 'applications', name: 'django'},
+      {group: 'apps', kind: 'Deployment', namespace: 'applications', name: 'django'}], ...argoState};
+  let head = 'b'.repeat(40);
   let view = {...session('demonstration'), state: 'INVESTIGATING',
-    scenario: {id: 'missing-configmap', title: 'Shop pods are failing to start', level: 2},
-    checks_passed: 2, checks_total: 3, fixed: false, next_check: null,
-    fix_surface: 'git', fix_paths: [sourcePath], trigger_revision: trigger, revision: trigger,
-    repair: {action: 'Restore the ConfigMap reference in Git.', reason: 'Repair desired state.'}};
+    scenario: {id: plan.scenario, title: 'Shop pods are failing to start', level: 2},
+    checks_passed: 2, checks_total: 3, fixed: false, next_check: null, fix_surface: fixSurface, fix_paths: [path],
+    trigger_revision: head, revision: head, repair: {action: 'Repair it.', reason: 'Because.', demo: {what: 'Repair.', why: 'Because.'}}};
   await page.addInitScript(() => {
     sessionStorage.setItem('argo-coach:handoff', JSON.stringify({session: 'session-1', token: 'test-token'}));
     sessionStorage.setItem('argo-coach:started:session-1', 'true');
@@ -1373,65 +1587,330 @@ test('demonstration shows the broken Git source and real commit before returning
     window.ArgoActionObserver = class { fromURL() {} };
     window.ArgoCoachTheme = {followTheme() {}};
   });
-  await page.route('**/*', route => {
-    const pathname = new URL(route.request().url()).pathname;
-    if (pathname === appURL) return route.fulfill({contentType: 'text/html',
-      body: '<html><body><main>shop-web-prod</main><script src="/coach/assets/coach.js"></script></body></html>'});
-    // Gitea 28 markup: page content in <div role="main">, one code element per source line.
-    if (pathname === sourceURL) return route.fulfill({contentType: 'text/html',
-      body: `<html><body><div role="main" class="page-content repository file"><table><tbody>
-        <tr><td class="lines-code chroma"><code class="code-inner"><span class="nt">name</span>: django-app-missing-config</code></td></tr>
-        </tbody></table></div><script src="/coach/assets/coach.js"></script></body></html>`});
-    if (pathname === commitURL) return route.fulfill({contentType: 'text/html',
-      body: `<html><body><div role="main" class="page-content repository diff"><h3>fix: restore the affected deployment chart</h3>
-        <a class="muted file-link tw-font-mono" title="${sourcePath}" href="#diff">${sourcePath}</a>
-        <code class="code-inner">- name: django-app-missing-config</code></div>
-        <script src="/coach/assets/coach.js"></script></body></html>`});
+  const giteaFile = sha => `<html><body><div role="main"><div class="latest-commit">
+      <a class="ui label commit-id-short" href="/gitea/remotelab/django-app/commit/${sha}">${sha.slice(0, 10)}</a></div>
+    <table><tr><td><code class="code-inner">          name: django-app-missing-config</code></td></tr></table></div>${repairCoach}</body></html>`;
+  const giteaCommit = `<html><body><div role="main"><div class="diff-file-box" data-new-filename="${path}">
+      <a class="file-link" title="${path}">${path}</a><table>
+      <tr class="del-code"><td><code class="code-inner">-   name: django-app-missing-config</code></td></tr>
+      <tr class="add-code"><td><code class="code-inner">+   name: shop-config</code></td></tr></table></div></div>${repairCoach}</body></html>`;
+  await page.route('**/*', async route => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const pathname = decodeURIComponent(url.pathname);
+    if (pathname === repairApp) return route.fulfill({contentType: 'text/html', body: fakeArgoPage});
+    if (pathname === `/gitea/remotelab/django-app/src/branch/main/${path}`) {
+      return route.fulfill({contentType: 'text/html', body: giteaFile(head)});
+    }
+    if (pathname === `/gitea/remotelab/django-app/commit/${head}`) return route.fulfill({contentType: 'text/html', body: giteaCommit});
+    if (pathname === '/terminal/') return route.fulfill({contentType: 'text/html', body: fakeTerminalPage});
+    if (pathname === '/fake-terminal/run') {
+      const command = request.postData();
+      calls.commands.push(command);
+      calls.onCommand?.(command);
+      const result = {exit: 0, output: [], ...shell(command)};
+      if (command.startsWith('git commit') && !result.exit) head = pushed;
+      return route.fulfill({json: {...result, head}});
+    }
+    if (pathname === '/argocd/api/v1/applications/shop-web-prod') return route.fulfill({json: {
+      spec: {source: {repoURL: argo.repoURL}},
+      status: {sync: {revision: argo.revision}, operationState: {phase: argo.phase, startedAt: argo.startedAt}, resources: argo.resources}}});
+    if (pathname.startsWith('/fake-argo/')) {
+      const body = JSON.parse(request.postData() || '{}');
+      const action = pathname.slice('/fake-argo/'.length);
+      calls.argo.push({action, ...body});
+      if (action === 'terminate') argo.phase = 'Failed';
+      if (action === 'save') argo.repoURL = body.repoURL;
+      if (action === 'sync') {
+        argo.startedAt = `start-${calls.argo.length}`;
+        if (body.prune) argo.resources = argo.resources.filter(item =>
+          !(item.requiresPruning && body.resources.includes([item.group || '', item.kind, item.namespace, item.name].join('/'))));
+      }
+      return route.fulfill({json: {}});
+    }
     if (pathname === '/coach/assets/coach.js') return route.fulfill({contentType: 'text/javascript', body: coach});
     if (pathname.startsWith('/coach/assets/ui/')) return route.fulfill({contentType: 'text/css',
       body: styles.get(pathname.split('/').at(-1)) || ''});
+    if (pathname === '/coach/learning/api/auth/gitea') return route.fulfill({json: {authenticated: true}});
+    if (pathname === '/coach/learning/api/sessions/session-1/repair-plan') return route.fulfill({json: plan});
+    if (pathname === '/coach/learning/api/sessions/session-1/actions') {
+      calls.actions.push(request.postDataJSON());
+      return route.fulfill({json: {session: view, evaluation: {accepted: true}}});
+    }
     if (pathname === '/coach/learning/api/sessions/session-1/demonstrate-fix') {
-      fixCalls += 1;
-      view = {...view, state: 'FIXED', fixed: true, revision: commit,
-        next_check: {id: 'verify-revision', target: 'app.history', where: 'History and Rollback',
-          action: 'Read the deployed revision.', reason: 'Confirm the deployed commit.',
-          demonstration_answer: commit, available: false}};
-      return route.fulfill({json: {commit, diff: `- name: django-app-missing-config\n`}});
+      calls.fixes += 1;
+      view = {...view, state: 'FIXED', fixed: true};
+      return route.fulfill({json: {commit: pushed, diff: '- name: django-app-missing-config\n'}});
     }
     if (pathname === '/coach/learning/api/sessions/session-1') return route.fulfill({json: view});
     return route.fulfill({status: 404, body: ''});
   });
+  await page.goto('http://lab.test' + repairApp);
+  return {browser, page, calls, argo};
+}
+
+/** Skips the reading countdown that is showing, as a viewer's Advance does. */
+async function advanceDemo(page) {
+  const advance = page.locator('#argocd-coach-host .demo-timer:not([hidden]) [data-action="advance"]');
+  await advance.waitFor({timeout: 30000});
+  await advance.click({noWaitAfter: true});
+}
+
+const repairStepCard = page => page.locator('#argocd-coach-host .demo-explanation p').first();
+const repairState = page => page.evaluate(() => JSON.parse(sessionStorage.getItem('argo-coach:demo-repair:session-1') || 'null'));
+
+test('demonstration repairs Git as a person would: Gitea source, typed terminal commands, then the pushed commit', {timeout: 120000}, async () => {
+  const path = 'chart/django-app/templates/deployment.yaml';
+  const plan = {scenario: 'missing-configmap', application: 'shop-web-prod', chart_path: 'chart/django-app', steps: [
+    {id: 'source', surface: 'gitea', action: 'view-source', path, find: 'django-app-missing-config',
+      what: 'Open the Deployment template in Git.', why: 'The template names the ConfigMap.'},
+    {id: 'terminal', surface: 'terminal', action: 'run-commands', what: 'Fix it in the terminal.', why: 'Git is the source.',
+      commands: [`sed -i 's|x|y|' ${path}`, 'git diff', "git commit -am 'fix: restore'", 'git push']},
+    {id: 'commit', surface: 'gitea', action: 'view-commit', path, what: 'Open the pushed commit.', why: 'It records the repair.'},
+  ]};
+  // Someone left an edit in the shared checkout.
+  const shell = command => command === 'git status --short --branch'
+    ? {output: ['## main...origin/main', ' M chart/django-app/values.yaml']} : {};
+  const {browser, page, calls} = await repairFixture({plan, shell});
   try {
-    await page.goto('http://lab.test' + appURL);
-    await page.locator('#argocd-coach-host .demo-timer:not([hidden])').waitFor();
-    await page.locator('#argocd-coach-host [data-action="advance"]').click({noWaitAfter: true});
-    await page.waitForURL('http://lab.test' + sourceURL);
-    // In Gitea too, the pointer and highlight show where to look.
-    const highlights = async selector => overlapping(
-      await page.locator('#argocd-coach-host .spotlight').last().boundingBox({timeout: 5000}),
-      await page.locator(selector).boundingBox());
+    await advanceDemo(page);
+    await repairStepCard(page).filter({hasText: 'Open the Deployment template in Git.'}).waitFor();
+    await advanceDemo(page);
+    // View Git source, clicked by the pointer, opens the file at main.
+    await page.waitForURL(`http://lab.test/gitea/remotelab/django-app/src/branch/main/${path}`);
     await page.locator('#argocd-coach-host .coach-pointer[data-visible]').waitFor();
-    assert.ok(await highlights('code.code-inner'), 'the missing ConfigMap name is highlighted in the source');
-    await page.locator('#argocd-coach-host .demo-explanation').getByText(/coach will restore the broken ConfigMap reference/).waitFor();
-    assert.equal(fixCalls, 0);
-    await page.locator('#argocd-coach-host [data-action="pause-demo"]').click();
-    assert.equal(await page.locator('#argocd-coach-host [data-action="advance"]').isDisabled(), true);
-    await page.locator('#argocd-coach-host [data-action="pause-demo"]').click();
-    await page.locator('#argocd-coach-host [data-action="advance"]').click({noWaitAfter: true});
-    await page.waitForURL('http://lab.test' + commitURL);
+    assert.ok(overlapping(await page.locator('#argocd-coach-host .spotlight').last().boundingBox(),
+      await page.locator('code.code-inner').boundingBox()), 'the missing ConfigMap name is highlighted');
+    await repairStepCard(page).filter({hasText: `${path} refers to django-app-missing-config.`}).waitFor();
+    // Gitea pages offer the way back to Argo CD, which the pointer clicks.
+    await advanceDemo(page);
+    await page.waitForURL('http://lab.test' + repairApp);
+    await repairStepCard(page).filter({hasText: 'Fix it in the terminal.'}).waitFor();
+    assert.equal((await page.locator('#argocd-coach-host [data-action="terminal"]').textContent()).trim(), 'Open terminal');
+
+    let duringTyping = null;
+    calls.onCommand = command => {
+      if (command === 'git diff') duringTyping = page.evaluate(() => {
+        const shadow = document.querySelector('#argocd-coach-host').shadowRoot;
+        const frame = shadow.querySelector('.terminal-dock iframe').getBoundingClientRect();
+        const pointer = shadow.querySelector('.coach-pointer');
+        const spot = Array.from(shadow.querySelectorAll('.spotlight')).at(-1)?.getBoundingClientRect();
+        return {pointer: pointer.hasAttribute('data-visible'), left: parseFloat(pointer.style.left), top: parseFloat(pointer.style.top),
+          frame: {left: frame.left, top: frame.top, right: frame.right, bottom: frame.bottom},
+          highlighted: Boolean(spot && spot.left <= frame.left && spot.right >= frame.right)};
+      });
+    };
+    await advanceDemo(page);
+    await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('argo-coach:demo-repair:session-1')).step === 2,
+      null, {timeout: 60000});
+    assert.deepEqual(calls.commands, ['git status --short --branch', 'git stash push --include-untracked --message "before demo"',
+      'git pull --ff-only', ...plan.steps[1].commands]);
+    // Each character was typed on its own, then Enter, through ttyd's terminal.
+    const typed = await page.frameLocator('#argocd-coach-host iframe[title="Lab terminal"]').locator('body')
+      .evaluate(() => window.term.typed);
+    assert.ok(typed.every(key => key.length === 1), 'one keystroke at a time');
+    assert.equal(typed.join(''), calls.commands.map(command => command + '\r').join(''));
+    const seen = await duringTyping;
+    assert.ok(seen.pointer && seen.highlighted, 'the pointer and highlight stay on the terminal while typing: ' + JSON.stringify(seen));
+    assert.ok(seen.left >= seen.frame.left && seen.left <= seen.frame.right && seen.top >= seen.frame.top &&
+      seen.top <= seen.frame.bottom, JSON.stringify(seen));
+    // The terminal is tucked away before the next step.
+    await page.locator('#argocd-coach-host .terminal-dock[data-minimized]').waitFor();
+    assert.equal((await repairState(page)).commit, 'c'.repeat(40));
+
+    await advanceDemo(page);
+    await page.waitForURL(`http://lab.test/gitea/remotelab/django-app/src/branch/main/${path}`);
+    // The file's latest commit link is the push; the pointer opens it.
+    await page.waitForURL(`http://lab.test/gitea/remotelab/django-app/commit/${'c'.repeat(40)}`);
+    await repairStepCard(page).filter({hasText: `Commit cccccccccc changes ${path}.`}).waitFor();
     await page.locator('#argocd-coach-host .coach-pointer[data-visible]').waitFor();
-    assert.ok(await highlights('code.code-inner'), 'the changed line is highlighted in the commit');
-    await page.locator('#argocd-coach-host .demo-explanation').getByText(/showing commit bbbbbbbbbb/).waitFor();
-    assert.equal(fixCalls, 1);
-    await page.reload();
-    await page.locator('#argocd-coach-host .demo-timer:not([hidden])').waitFor();
-    await page.locator('#argocd-coach-host [data-action="advance"]').click({noWaitAfter: true});
-    await page.waitForURL('http://lab.test' + appURL);
-    await page.locator('#argocd-coach-host .demo-explanation').getByText(/Read the deployed revision/).waitFor();
-    assert.equal(fixCalls, 1);
-    assert.equal(await page.evaluate(() => sessionStorage.getItem('argo-coach:demo-git:session-1')), null);
-    assert.equal(await page.locator('#argocd-coach-host .demo-patch a').getAttribute('href'), commitURL);
+    assert.ok(overlapping(await page.locator('#argocd-coach-host .spotlight').last().boundingBox(),
+      await page.locator('tr.add-code').boundingBox()), 'the changed lines are highlighted');
+    await advanceDemo(page);
+    await page.waitForURL('http://lab.test' + repairApp);
+    await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('argo-coach:demo-repair:session-1')).step === 3);
+    assert.equal(calls.fixes, 0, 'the reference repair is not used');
+    assert.equal(calls.actions.filter(action => action.type === 'demo_fallback').length, 0);
   } finally { await browser.close(); }
+});
+
+// A session update re-renders the panel, replacing the button the pointer is
+// heading for: while the pointer moves there, or during its click animation.
+for (const [moment, selector] of [['moves there', '.coach-pointer[data-visible]'], ['clicks', '.coach-pointer[data-click]']]) {
+  test(`the pointer clicks View Git source even when the panel re-renders while it ${moment}`, {timeout: 60000}, async () => {
+    const path = 'chart/django-app/templates/deployment.yaml';
+    const plan = {scenario: 'missing-configmap', application: 'shop-web-prod', chart_path: 'chart/django-app', steps: [
+      {id: 'source', surface: 'gitea', action: 'view-source', path, find: 'django-app-missing-config',
+        what: 'Open the Deployment template in Git.', why: 'The template names the ConfigMap.'}]};
+    const {browser, page, calls} = await repairFixture({plan});
+    try {
+      await advanceDemo(page);
+      await repairStepCard(page).filter({hasText: 'Open the Deployment template in Git.'}).waitFor();
+      await advanceDemo(page);
+      await page.evaluate(selector => new Promise(resolve => {
+        const shadow = document.querySelector('#argocd-coach-host').shadowRoot;
+        const tick = () => {
+          const button = shadow.querySelector('[data-action="gitea"]');
+          if (shadow.querySelector(selector) && button) {
+            button.replaceWith(button.cloneNode(true));
+            resolve();
+          } else requestAnimationFrame(tick);
+        };
+        tick();
+      }), selector);
+      await page.waitForURL(`http://lab.test/gitea/remotelab/django-app/src/branch/main/${path}`, {timeout: 10000});
+      assert.equal(calls.actions.filter(action => action.type === 'demo_fallback').length, 0);
+    } finally { await browser.close(); }
+  });
+}
+
+test('a repair command that fails says why, records the fallback, and applies the reference repair', {timeout: 60000}, async () => {
+  const plan = {scenario: 'env-drift', application: 'shop-web-prod', chart_path: 'chart/django-app', steps: [
+    {id: 'terminal', surface: 'terminal', action: 'run-commands', what: 'Fix it in the terminal.', why: 'Git is the source.',
+      commands: ["sed -i 's|a|b|' chart/django-app/values.yaml", 'git push']}]};
+  const shell = command => ({exit: command.startsWith('sed') ? 1 : 0});
+  const {browser, page, calls} = await repairFixture({plan, shell});
+  try {
+    await advanceDemo(page);
+    await advanceDemo(page);
+    const notice = page.locator('#argocd-coach-host .message');
+    await notice.filter({hasText: /exited with status 1, so the coach applied the repair for you/}).waitFor({timeout: 30000});
+    assert.equal(calls.fixes, 1);
+    const fallback = calls.actions.find(action => action.type === 'demo_fallback');
+    assert.equal(fallback.details.step, 'terminal');
+    assert.match(fallback.details.reason, /^sed .* exited with status 1$/);
+    assert.ok(!calls.commands.includes('git push'), 'nothing after the failed command runs');
+  } finally { await browser.close(); }
+});
+
+test('repo-auth repair types the working URL into Argo CD\'s source form, saves it, and refreshes', {timeout: 60000}, async () => {
+  const working = 'http://gitea.applications.svc.cluster.local:3000/remotelab/django-app.git';
+  const plan = {scenario: 'repo-auth', application: 'shop-web-prod', chart_path: '', steps: [
+    {id: 'repo-url', surface: 'argo', action: 'set-repo-url', value: working, what: 'Set Repo URL.', why: 'It is the working entry.'},
+    {id: 'refresh', surface: 'argo', action: 'refresh', what: 'Refresh.', why: 'Compare now.'}]};
+  const {browser, page, calls, argo} = await repairFixture({plan, fixSurface: 'argo'});
+  try {
+    await advanceDemo(page);
+    await advanceDemo(page);
+    await page.locator('.editable-panel input.argo-field').waitFor();
+    // Typing appears a character at a time in the field.
+    await page.waitForFunction(() => {
+      const value = document.querySelector('.editable-panel input.argo-field')?.value || '';
+      return value.length > 4 && value.length < 30;
+    });
+    await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('argo-coach:demo-repair:session-1')).step === 1,
+      null, {timeout: 30000});
+    assert.equal(argo.repoURL, working, 'Argo saved the typed URL');
+    assert.equal(await page.locator('.sliding-panel--opened').count(), 0, 'the Details drawer was closed');
+    await advanceDemo(page);
+    await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('argo-coach:demo-repair:session-1')).step === 2);
+    assert.deepEqual(calls.argo.map(call => call.action), ['save', 'refresh']);
+    assert.equal(calls.fixes, 0);
+  } finally { await browser.close(); }
+});
+
+test('Sync Status terminates a running operation through its confirmation, and a later step syncs the repair', {timeout: 60000}, async () => {
+  const plan = {scenario: 'stuck-sync', application: 'shop-web-prod', chart_path: 'chart/django-app', steps: [
+    {id: 'terminate', surface: 'argo', action: 'terminate-operation', when: 'operation-running', what: 'Terminate.', why: 'It blocks.'},
+    {id: 'sync', surface: 'argo', action: 'sync', when: 'not-fixed', what: 'Sync.', why: 'Run the hook.'}]};
+  const {browser, page, calls, argo} = await repairFixture({plan, argo: {phase: 'Running'}});
+  try {
+    await advanceDemo(page);
+    await advanceDemo(page);
+    const confirm = page.locator('[qe-id="argo-popup-ok-button"]');
+    await confirm.waitFor();
+    assert.equal(await page.locator('.popup-container').innerText().then(text => /terminate operation/.test(text)), true);
+    await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('argo-coach:demo-repair:session-1')).step === 1,
+      null, {timeout: 30000});
+    assert.equal(argo.phase, 'Failed');
+    // Sync Status slides in; the pointer waits for Terminate to stop moving, then clicks it where it is.
+    const click = await page.evaluate(() => window.terminateClick);
+    assert.ok(click.x >= click.box.left && click.x <= click.box.right && click.y >= click.box.top && click.y <= click.box.bottom,
+      JSON.stringify(click));
+    await advanceDemo(page);
+    await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('argo-coach:demo-repair:session-1')).step === 2,
+      null, {timeout: 30000});
+    assert.deepEqual(calls.argo.map(call => call.action), ['terminate', 'sync']);
+    assert.equal(calls.fixes, 0);
+  } finally { await browser.close(); }
+});
+
+test('with no operation running, the terminate step is skipped and says so', {timeout: 30000}, async () => {
+  const plan = {scenario: 'wrong-type-sops', application: 'shop-web-prod', chart_path: 'chart/django-app', steps: [
+    {id: 'terminate', surface: 'argo', action: 'terminate-operation', when: 'operation-running', what: 'Terminate.', why: 'It blocks.'},
+    {id: 'refresh', surface: 'argo', action: 'refresh', what: 'Refresh.', why: 'Compare now.'}]};
+  const {browser, page, calls} = await repairFixture({plan, argo: {phase: 'Failed'}});
+  try {
+    await advanceDemo(page);
+    await advanceDemo(page);
+    await page.locator('#argocd-coach-host .message').filter({hasText: 'nothing to terminate'}).waitFor();
+    assert.equal((await repairState(page)).step, 1);
+    assert.equal(calls.argo.length, 0, 'Sync Status was not opened');
+  } finally { await browser.close(); }
+});
+
+test('the prune step inspects Diff, then syncs with Prune and only the leftover resource selected', {timeout: 60000}, async () => {
+  const orphan = {group: 'apps', kind: 'Deployment', namespace: 'applications', name: 'django-web'};
+  const plan = {scenario: 'orphaned-resource', application: 'shop-web-prod', chart_path: 'chart/django-app', steps: [
+    {id: 'diff', surface: 'argo', action: 'diff', resource: orphan, what: 'Open Diff.', why: 'See what is left.'},
+    {id: 'prune', surface: 'argo', action: 'prune', resource: orphan, what: 'Prune it.', why: 'Only the orphan.'}]};
+  const resources = [{group: '', kind: 'Service', namespace: 'applications', name: 'django'},
+    {group: 'apps', kind: 'Deployment', namespace: 'applications', name: 'django'},
+    {...orphan, requiresPruning: true}];
+  const {browser, page, calls, argo} = await repairFixture({plan, argo: {resources}});
+  try {
+    await advanceDemo(page);
+    await advanceDemo(page);
+    await page.locator('.application-resources-diff').waitFor();
+    await repairStepCard(page).filter({hasText: 'Only Deployment django-web is left to remove.'}).waitFor();
+    await advanceDemo(page);
+    await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('argo-coach:demo-repair:session-1')).step === 1);
+    await advanceDemo(page);
+    await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('argo-coach:demo-repair:session-1')).step === 2,
+      null, {timeout: 30000});
+    assert.deepEqual(calls.argo, [{action: 'sync', prune: true, resources: ['apps/Deployment/applications/django-web']}]);
+    // The coach typed prune into Argo's confirmation, keeping off the dialog while it was open.
+    const {typed, coach, dialog} = await page.evaluate(() => window.pruneConfirmed);
+    assert.equal(typed, 'prune');
+    assert.equal(coach.length, 6, 'five keystrokes and OK');
+    for (const box of coach) {
+      assert.ok(box.right <= dialog.left || box.left >= dialog.right || box.bottom <= dialog.top || box.top >= dialog.bottom,
+        `the coach ${JSON.stringify(box)} covers the dialog ${JSON.stringify(dialog)}`);
+    }
+    assert.equal(await page.evaluate(() => document.querySelector('#argocd-coach-host').hasAttribute('data-compact')), false,
+      'the coach shows its full explanation again once the dialog closes');
+    assert.deepEqual(argo.resources.map(item => item.name), ['django', 'django']);
+    assert.equal(calls.fixes, 0);
+  } finally { await browser.close(); }
+});
+
+test('Gitea pages offer a way back to Argo CD in every mode', {timeout: 30000}, async () => {
+  for (const mode of ['guided', 'challenge']) {
+    const browser = await launchBrowser();
+    const page = await browser.newPage();
+    await page.addInitScript(() => {
+      sessionStorage.setItem('argo-coach:handoff', JSON.stringify({session: 'session-1', token: 'test-token'}));
+      sessionStorage.setItem('argo-coach:started:session-1', 'true');
+      window.WebSocket = undefined;
+      window.GuidedStepClock = class { stepId = null; start(id) { this.stepId = id; } stop() {} input() {} };
+      window.ArgoActionObserver = class { fromURL() {} };
+      window.ArgoCoachTheme = {followTheme() {}};
+    });
+    await page.route('**/*', route => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname.startsWith('/gitea/')) return route.fulfill({contentType: 'text/html', body: `<html><body>Gitea${repairCoach}</body></html>`});
+      if (pathname === repairApp) return route.fulfill({contentType: 'text/html', body: '<html><body>Argo</body></html>'});
+      if (pathname === '/coach/assets/coach.js') return route.fulfill({contentType: 'text/javascript', body: coach});
+      if (pathname.startsWith('/coach/assets/ui/')) return route.fulfill({contentType: 'text/css', body: styles.get(pathname.split('/').at(-1)) || ''});
+      if (pathname === '/coach/learning/api/sessions/session-1') return route.fulfill({json: {...session(mode), fix_surface: 'git'}});
+      return route.fulfill({status: 404, body: ''});
+    });
+    try {
+      await page.goto('http://lab.test/gitea/remotelab/django-app/src/branch/main/chart/django-app/values.yaml');
+      await page.locator('#argocd-coach-host [data-action="argocd"]').click();
+      await page.waitForURL('http://lab.test' + repairApp);
+    } finally { await browser.close(); }
+  }
 });
 
 test('terminal minimizes without remounting, resizes, and debrief is centered', {timeout: 15000}, async () => {

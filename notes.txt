@@ -1,3 +1,0 @@
-- we need to add a "this is loading" page, similar to ELK-Guide so that it doesn't go to the argo UI until the scenario is actually ready.
-- add some sort of notification (maybe via config) to places like slack/etc for argo deployments
-- add in a scenario where we change the appset to use a github app (or some other type of auth) involving a switch from ssh to https

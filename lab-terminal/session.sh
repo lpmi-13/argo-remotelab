@@ -25,4 +25,9 @@ git -C "$repo" config user.name "Lab Learner"
 git -C "$repo" config user.email "learner@remotelab.local"
 cd "$repo"
 export SOPS_AGE_KEY_FILE=/secrets/age-key.txt
+# sops encrypts to the lab's age recipient without a .sops.yaml at the root.
+SOPS_AGE_RECIPIENTS="$(age-keygen -y "$SOPS_AGE_KEY_FILE")"
+export SOPS_AGE_RECIPIENTS
+# The docked terminal is small; print diffs and logs instead of paging them.
+export GIT_PAGER=cat
 exec /bin/bash --login

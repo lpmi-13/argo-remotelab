@@ -1,15 +1,24 @@
 /* Demonstration progress that coach.js keeps in sessionStorage, so a
  * demonstration resumes where it was after Argo CD or Gitea loads a new page. */
 
-/** Where a demonstration's Git repair has got to. */
-interface DemoGitStep {
-  phase: 'source' | 'commit' | 'committing' | 'review' | 'return';
-  /** Gitea path of the file being repaired. */
-  source?: string;
+/** Where a demonstration's repair has got to (see the repair section of coach.js). */
+interface DemoRepair {
+  plan: RepairPlan;
+  /** The step in progress; plan.steps.length once the repair is complete. */
+  step: number;
+  /** How far a step that spans page loads has got, such as 'opening' or 'shown'. */
+  stage: string | null;
+  /** Commands of the current terminal step that have already run. */
+  command: number;
+  /** The terminal's checkout was checked, and stashed if needed, for this repair. */
+  checkoutReady?: boolean;
+  /** HEAD in the terminal after its last command: the pushed repair commit. */
   commit?: string;
+  /** The step that could not finish, after which the reference repair took over. */
+  fellBack?: string;
 }
 
-/** The reference fix's commit and diff, shown as "Source change". */
+/** The reference repair's commit and diff, shown as "Source change" after a fallback. */
 interface DemoPatch {
   commit: string;
   diff: string;

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -202,5 +203,28 @@ func TestReadRequestHandlesEmptyAndOversizedBodies(t *testing.T) {
 	request = &http.Request{Body: io.NopCloser(strings.NewReader(strings.Repeat("a", 64*1024+1)))}
 	if _, err := readRequest(request); err == nil {
 		t.Fatal("oversized request accepted")
+	}
+}
+
+func TestRepairPlanMatchesTheRunsFaultAndEnvironment(t *testing.T) {
+	server := &Server{runs: map[string]*Run{
+		"run-a": {ID: "run-a", Scenario: "missing-configmap", Environment: "staging", Application: stagingApp, Seed: 2},
+		"run-b": {ID: "run-b", Scenario: "console-history", Environment: "prod", Application: prodApp},
+	}}
+	get := func(path string) (int, string) {
+		recorder := httptest.NewRecorder()
+		server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		return recorder.Code, recorder.Body.String()
+	}
+	code, body := get("/api/runs/run-a/repair-plan")
+	if code != 200 || !strings.Contains(body, `"chart_path":"chart/django-app-staging"`) ||
+		!strings.Contains(body, "volumeMounts") || strings.Contains(body, "chart/django-app/templates") {
+		t.Fatalf("staging volume variant plan: %d %s", code, body)
+	}
+	if code, _ := get("/api/runs/run-b/repair-plan"); code != 409 {
+		t.Fatalf("Level 1 repair plan returned %d", code)
+	}
+	if code, _ := get("/api/runs/missing/repair-plan"); code != 404 {
+		t.Fatalf("unknown run returned %d", code)
 	}
 }

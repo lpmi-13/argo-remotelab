@@ -17,7 +17,7 @@
   const positionKey = `argo-coach:position:${config.session}`;
   const demoPatchKey = `argo-coach:demo-patch:${config.session}`;
   const demoFixKey = `argo-coach:demo-fix-started:${config.session}`;
-  const demoGitKey = `argo-coach:demo-git:${config.session}`;
+  const demoRepairKey = `argo-coach:demo-repair:${config.session}`;
   const demoNarrationKey = `argo-coach:demo-narration:${config.session}`;
   const demoAttemptsKey = `argo-coach:demo-attempts:${config.session}`;
   const demoPausedKey = `argo-coach:demo-paused:${config.session}`;
@@ -77,8 +77,8 @@
   let pointerTimer = null;
   /** @type {DemoPatch | null} */
   let demoPatch = JSON.parse(sessionStorage.getItem(demoPatchKey) || 'null');
-  /** @type {DemoGitStep | null} */
-  let demoGit = JSON.parse(sessionStorage.getItem(demoGitKey) || 'null');
+  /** @type {DemoRepair | null} */
+  let demoRepair = JSON.parse(sessionStorage.getItem(demoRepairKey) || 'null');
   /** @type {DemoNarration | null} */
   let demoNarration = JSON.parse(sessionStorage.getItem(demoNarrationKey) || 'null');
   /** @type {DemoAttempts | null} */
@@ -127,20 +127,19 @@
   /** @param {string} [commit] */
   const gitCommitURL = commit => /^[0-9a-f]{40}$/.test(commit || '')
     ? `/gitea/remotelab/django-app/commit/${commit}` : null;
-  function gitSourceURL() {
-    if (view?.scenario.id !== 'missing-configmap' || !/^[0-9a-f]{40}$/.test(view.trigger_revision || '')) return null;
-    const path = view.fix_paths?.[0] || '';
-    if (!/^chart\/django-app(?:-staging)?\/templates\/deployment\.yaml$/.test(path)) return null;
-    return `/gitea/remotelab/django-app/src/commit/${view.trigger_revision}/${path}`;
+  /** @param {DemoRepair | null} next */
+  function saveDemoRepair(next) {
+    demoRepair = next;
+    if (next) sessionStorage.setItem(demoRepairKey, JSON.stringify(next));
+    else sessionStorage.removeItem(demoRepairKey);
   }
-  /** @param {DemoGitStep | null} next */
-  function saveDemoGit(next) {
-    demoGit = next;
-    if (next) sessionStorage.setItem(demoGitKey, JSON.stringify(next));
-    else sessionStorage.removeItem(demoGitKey);
+  /** The repair step a demonstration is performing, until the repair is done or falls back. */
+  function repairStep() {
+    if (!demoRepair || demoRepair.fellBack || view?.mode !== 'demonstration' || view.feedback) return null;
+    return demoRepair.plan.steps[demoRepair.step] || null;
   }
   function demoStepId() {
-    if (demoGit && view?.mode === 'demonstration' && !view.feedback) return `fix:${view.scenario.id}`;
+    if (repairStep()) return `repair:${demoRepair.step}`;
     if (view?.next_check) return view.next_check.id;
     if (view && !view.fixed && view.scenario.level !== 1) return `fix:${view.scenario.id}`;
     return null;
@@ -178,7 +177,7 @@
     clearTimeout(reconnectTimer);
     if (stream) { stream.onclose = null; stream.close(); stream = null; }
     for (const key of ['argo-coach:handoff', 'argo-coach:argocd-landing', startedKey, initialViewKey,
-      seqKey, collapsedKey, positionKey, demoPatchKey, demoFixKey, demoGitKey, demoNarrationKey,
+      seqKey, collapsedKey, positionKey, demoPatchKey, demoFixKey, demoRepairKey, demoNarrationKey,
       demoAttemptsKey, demoPausedKey, debriefDismissedKey]) sessionStorage.removeItem(key);
   }
 
@@ -369,10 +368,22 @@
         <p>${escape(note.text)}</p></li>`).join('')}</ul></section>`;
   }
 
-  /** Where Argo shows its popups and what the coach explains. An open drawer covers the header. */
+  /** Argo CD's confirmation dialogs on screen, such as Terminate's and Prune's. */
+  const argoDialogs = () => Array.from(document.querySelectorAll('.popup-container'))
+    .filter(visible).map(element => padded(element.getBoundingClientRect()));
+
+  /**
+   * Where Argo shows its popups and what the coach explains. An open drawer covers the header.
+   * A toast slides in from off screen, so keep clear of its container, where it comes to rest.
+   */
   function argoAreas(onScreen = explainingArgo() ? argoNotesOnScreen() : []) {
     if (!explainingArgo()) return [];
-    return [...argoToasts(), ...(nativeOverlayOpen ? [] : onScreen.filter(note => note.id !== 'popup').map(note => note.element))]
+    return [...argoToasts().map(toast => {
+      const container = toast.closest('.Toastify__toast-container');
+      const box = container?.getBoundingClientRect();
+      return box?.width && box.height ? container : toast;
+    }),
+      ...(nativeOverlayOpen ? [] : onScreen.filter(note => note.id !== 'popup').map(note => note.element))]
       .map(element => padded(element.getBoundingClientRect()));
   }
 
@@ -407,7 +418,13 @@
     settleArgoNotes(onScreen);
   }
 
-  const nativeOverlayObserver = new MutationObserver(() => { updateNativeOverlay(); updateArgoNotice(); });
+  function endCompactPanel() {
+    if (!host.hasAttribute('data-compact') || argoDialogs().length) return;
+    host.removeAttribute('data-compact');
+    if (clearPosition) { clearPosition = null; render(); }
+  }
+
+  const nativeOverlayObserver = new MutationObserver(() => { updateNativeOverlay(); updateArgoNotice(); endCompactPanel(); });
   nativeOverlayObserver.observe(document.body, {childList: true, subtree: true,
     attributes: true, attributeFilter: ['class', 'style', 'aria-hidden']});
   updateNativeOverlay();
@@ -626,8 +643,9 @@
     if (demoAdvance || demoBusy || demoNavigating || demoStopped || demoPaused || document.hidden || briefOpen || view?.mode !== 'demonstration' ||
         view.feedback || !['READY', 'INVESTIGATING', 'FIXED'].includes(view.state)) return;
     const stepId = demoStepId();
-    if (demoGit) {
-      if (['source', 'review'].includes(demoGit.phase)) void driveDemo();
+    if (repairStep()) {
+      // A step that loaded a new page carries on there; others wait to be read first.
+      if (demoRepair.stage && !repairReadingStages.has(demoRepair.stage)) void driveDemo();
       else startDemoDelay(driveDemo);
     } else if (stepId && demoNarration?.id === stepId && ['doing', 'locate'].includes(demoNarration.phase)) {
       void driveDemo();
@@ -709,18 +727,13 @@
   function checkCard() {
     const check = view.next_check;
     if (view.mode === 'challenge') return '';
-    if (view.mode === 'demonstration' && demoGit) {
-      const commit = demoGit.commit || demoPatch?.commit || '';
-      const reviewing = ['review', 'return'].includes(demoGit.phase);
-      const what = reviewing ? `The coach is showing commit ${commit.slice(0, 10)} and its deployment chart change in Git.` :
-        demoGit.phase === 'committing' ? 'The repaired deployment chart is being committed and pushed.' :
-        demoGit.phase === 'commit' ? 'The coach will restore the broken ConfigMap reference, commit, and push the repair.' :
-        'Open the deployment template at the incident revision and find the missing ConfigMap reference.';
-      const why = reviewing ? 'This commit records the source repair. Next, confirm Argo deployed the same revision.' :
-        demoGit.phase === 'committing' ? 'The change is being committed and pushed to the lab Git repository.' :
-        'The pod warning points to this chart file. The source revision keeps the failing value visible while we inspect it.';
-      return `<section class="step-card demo-step"><p class="step-count">Repair in Git</p>
-        ${demoExplanation(what, why, demoGit.phase === 'committing' ? 'Doing' : reviewing ? 'Found' : 'Next')}</section>`;
+    const step = view.mode === 'demonstration' ? repairStep() : null;
+    if (step) {
+      // Narration for this step: what is being done now, or what was found.
+      const narration = demoNarration?.id === demoStepId() ? demoNarration : null;
+      const label = narration?.phase === 'doing' ? 'Doing' : narration?.phase === 'learning' ? 'Found' : 'Next';
+      return `<section class="step-card demo-step"><p class="step-count">Repair · step ${demoRepair.step + 1} of ${demoRepair.plan.steps.length}</p>
+        ${demoExplanation(narration?.detail || step.what, narration?.detailReason || step.why, label)}</section>`;
     }
     if (!check) {
       if (!view.fixed && view.scenario.level !== 1) {
@@ -944,23 +957,39 @@
   function keepPanelClear(...areas) {
     const panel = root.querySelector('.panel');
     if (!panel || !areas.length) return;
+    if (placePanelClear(panel, areas)) return;
+    // Beside a wide Argo dialog on a small screen, keep only what the coach is
+    // doing, which fits above or below it, until the dialog closes.
+    if (view?.mode !== 'demonstration' || host.hasAttribute('data-compact') || !argoDialogs().length) return;
+    host.setAttribute('data-compact', '');
+    placePanelClear(panel, areas);
+  }
+
+  /**
+   * @param {Element} panel @param {{left: number, top: number, right: number, bottom: number}[]} areas
+   * @returns {boolean} whether the panel now leaves every area visible
+   */
+  function placePanelClear(panel, areas) {
     const box = panel.getBoundingClientRect();
     const gap = 12;
     /** @param {{x: number, y: number}} spot @param {typeof areas} [avoid] */
     const clear = (spot, avoid = areas) => !avoid.some(area => spot.x < area.right + gap &&
       spot.x + box.width > area.left - gap && spot.y < area.bottom + gap && spot.y + box.height > area.top - gap);
     const current = {x: box.left, y: box.top};
-    if (clear(current)) return;
+    if (clear(current)) return true;
     const right = innerWidth - box.width - 20;
     const bottom = innerHeight - box.height - gap;
-    const spots = [[right, 72], [right, bottom], [gap, bottom], [gap, 72]].map(([x, y]) => clampPanel(panel, x, y));
+    // The top edge, over Argo's toolbar, is the last resort: a dialog's overlay covers the toolbar anyway.
+    const spots = [[right, 72], [right, bottom], [gap, bottom], [gap, 72], [right, gap], [gap, gap]]
+      .map(([x, y]) => clampPanel(panel, x, y));
     const pointedAt = areas.slice(0, 1);
-    const spot = spots.find(candidate => clear(candidate)) ||
-      (clear(current, pointedAt) ? null : spots.find(candidate => clear(candidate, pointedAt)));
-    if (!spot) return;
+    const clearOfAll = spots.find(candidate => clear(candidate));
+    const spot = clearOfAll || (clear(current, pointedAt) ? null : spots.find(candidate => clear(candidate, pointedAt)));
+    if (!spot) return false;
     clearPosition = spot;
     clearStep = demoStepId();
     placePanel(panel, spot);
+    return Boolean(clearOfAll);
   }
 
   function render() {
@@ -1024,10 +1053,18 @@
     }
     // Once the mission is complete every mode may explore Git and the terminal.
     const exploring = Boolean(view.feedback);
-    const showGitSource = view.fix_surface !== 'none' && (exploring || (view.mode !== 'demonstration' && !recentLearning));
-    const showTerminal = (exploring || view.mode !== 'demonstration') &&
+    // A demonstration shows the controls its repair uses, where a learner would find them.
+    const repairing = repairStep();
+    /** @param {RepairStep['surface']} surface */
+    const repairUses = surface => Boolean(repairing) && demoRepair.plan.steps.some(step => step.surface === surface);
+    const onGitea = location.pathname.startsWith('/gitea/');
+    const gitPath = (repairing?.surface === 'gitea' && repairing.path) || view.fix_paths?.[0] || '';
+    const showGitSource = view.fix_surface !== 'none' &&
+      (exploring || repairUses('gitea') || (view.mode !== 'demonstration' && !recentLearning));
+    const showTerminal = (exploring || repairUses('terminal') || view.mode !== 'demonstration') &&
       ['git', 'argo-and-git', 'terminal'].includes(view.fix_surface);
-    const sourceActions = `${showGitSource ? '<button class="secondary" data-action="gitea">View Git source</button>' : ''}
+    const sourceActions = `${onGitea ? '<button class="secondary" data-action="argocd">Return to Argo CD</button>' : ''}
+      ${showGitSource ? `<button class="secondary" data-action="gitea" data-path="${escape(gitPath)}">View Git source</button>` : ''}
       ${showTerminal ? `<button class="secondary" data-action="terminal">${!terminalOpen ? 'Open terminal' : terminalMinimized ? 'Restore terminal' : 'Minimize terminal'}</button>` : ''}`;
     const body = exploring ? completedSummary(sourceActions)
       : preparing ? `<p>Preparing the environment and waiting for Argo CD to show the incident…</p>`
@@ -1045,7 +1082,7 @@
            `<div class="actions"><button class="secondary" data-action="incident-info">Incident info</button><button class="secondary" data-action="hint">Hint</button>
              <button class="secondary" data-action="show-location">Show me</button>
              ${view.fixed && view.scenario.level !== 1 && !view.feedback ? '<button class="primary" data-action="note">Write incident note</button>' : ''}</div>`}
-         ${showGitSource || showTerminal ? `<div class="actions">${sourceActions}</div>` : ''}`;
+         ${onGitea || showGitSource || showTerminal ? `<div class="actions">${sourceActions}</div>` : ''}`;
     /** @type {NodeListOf<HTMLInputElement | HTMLTextAreaElement>} */
     const fields = root.querySelectorAll('input, textarea');
     const previousValues = new Map(Array.from(fields).map(element => [element.id, element.value]));
@@ -1277,14 +1314,15 @@
     return true;
   }
 
-  function spotlight(element, relatedElement = null) {
+  /** @param {Element} element @param {Element | null} [relatedElement] @param {boolean} [lasting] Keep it past five seconds. */
+  function spotlight(element, relatedElement = null, lasting = false) {
     const bounds = element.getBoundingClientRect();
     const related = relatedElement?.getBoundingClientRect();
     const left = Math.min(bounds.left, related?.left ?? bounds.left);
     const top = Math.min(bounds.top, related?.top ?? bounds.top);
     const right = Math.max(bounds.right, related?.right ?? bounds.right);
     const bottom = Math.max(bounds.bottom, related?.bottom ?? bounds.bottom);
-    keepPanelClear({left: left - 4, top: top - 4, right: right + 4, bottom: bottom + 4}, ...argoAreas());
+    keepPanelClear({left: left - 4, top: top - 4, right: right + 4, bottom: bottom + 4}, ...argoDialogs(), ...argoAreas());
     const frame = document.createElement('div');
     frame.className = 'spotlight';
     Object.assign(frame.style, {left: `${left - 4}px`, top: `${top - 4}px`,
@@ -1294,10 +1332,11 @@
     // then rather than leaving it over the new page.
     const shownAt = performance.now();
     const watch = setInterval(() => {
-      if (element.isConnected && frame.isConnected && performance.now() - shownAt < 5000) return;
+      if (element.isConnected && frame.isConnected && (lasting || performance.now() - shownAt < 5000)) return;
       clearInterval(watch);
       frame.remove();
     }, 100);
+    return frame;
   }
 
   // Scroll the nearest drawer or page first, then its parents. Native smooth
@@ -1370,11 +1409,27 @@
     return element.isConnected && !demoStopped;
   }
 
+  /**
+   * Where an element comes to rest, such as a button in an Argo CD panel that is
+   * still sliding in: the same box for three frames in a row, or after 1.5 s.
+   * @param {Element} element @returns {Promise<DOMRect>}
+   */
+  async function stillBounds(element) {
+    let last = element.getBoundingClientRect();
+    for (let frame = 0, still = 0; frame < 90 && still < 3 && element.isConnected; frame += 1) {
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      const now = element.getBoundingClientRect();
+      still = Math.abs(now.left - last.left) < 1 && Math.abs(now.top - last.top) < 1 ? still + 1 : 0;
+      last = now;
+    }
+    return last;
+  }
+
   async function pointAt(element, click = false, highlightWith = null) {
     if (!element?.isConnected || !visible(element) || demoStopped) return false;
     if (!await scrollToTarget(element)) return false;
-    const bounds = element.getBoundingClientRect();
-    if (!bounds.width || !bounds.height) return false;
+    const bounds = await stillBounds(element);
+    if (!bounds.width || !bounds.height || !element.isConnected) return false;
     spotlight(element, highlightWith);
     if (!pointer.style.left) {
       const panel = root.querySelector('.panel')?.getBoundingClientRect();
@@ -1392,6 +1447,8 @@
     if (click) {
       pointer.dataset.click = 'true';
       await sleep(180);
+      // A render can replace the element during the click animation too.
+      if (demoStopped || !element.isConnected) return false;
       element.click();
     }
     pointerTimer = setTimeout(() => { pointer.removeAttribute('data-visible'); }, click ? 1200 : 2700);
@@ -1907,17 +1964,6 @@
     await answerCheck(check.demonstration_answer);
   }
 
-  // Gitea 28 puts its page content in <div role="main">, not <main>.
-  function gitPageTarget() {
-    const missingName = view.scenario.id === 'missing-configmap' &&
-      Array.from(document.querySelectorAll('main code, [role="main"] code')).find(element =>
-        element.textContent?.includes('django-app-missing-config') && visible(element));
-    if (missingName) return missingName;
-    const path = view.fix_paths?.[0];
-    return path && Array.from(document.querySelectorAll('main a, [role="main"] a')).find(element =>
-      element.textContent?.trim() === path && visible(element));
-  }
-
   /**
    * Types into one of the coach's own fields the way a person would, with the
    * pointer on the field. A render replaces the field, so it is looked up again
@@ -1970,41 +2016,715 @@
     }
   }
 
-  /** @param {string} path */
-  function navigateDemo(path) {
-    demoNavigating = true;
-    location.href = path;
+  // ---- Demonstration repair --------------------------------------------------
+  // A demonstration repairs the run the way its mission teaches: with Argo CD's
+  // own controls, the coach's Git and terminal buttons, Gitea pages, and
+  // commands typed into the lab terminal. The scenario controller's repair plan
+  // lists the steps for this run's fault and variant. When a step cannot
+  // finish, the coach says why and falls back to the controller's reference
+  // repair, so the demonstration still ends.
+
+  /** Stages after which a step waits for its reading countdown before going on. */
+  const repairReadingStages = new Set(['shown', 'reviewed']);
+  const giteaRepository = '/gitea/remotelab/django-app';
+  /** lab-terminal/telemetry.sh titles each prompt "lab-terminal <count> <exit code> <HEAD>". */
+  const terminalTitle = /^lab-terminal (\d+) (\d+) (\S+)/;
+
+  /** @typedef {'done' | 'read' | 'navigating' | 'stopped' | {skipped: string} | {failed: string}} RepairOutcome */
+  /** @param {string} reason @returns {RepairOutcome} */
+  const fail = reason => ({failed: reason});
+
+  /**
+   * Polls until find returns something, for up to timeout ms.
+   * @template T @param {() => T | Promise<T>} find @param {number} timeout @param {number} [interval]
+   * @returns {Promise<T | null>}
+   */
+  async function waitUntil(find, timeout, interval = 250) {
+    const deadline = performance.now() + timeout;
+    while (!demoStopped) {
+      const found = await find();
+      if (found) return found;
+      if (performance.now() >= deadline) return null;
+      await sleep(interval);
+    }
+    return null;
   }
 
-  /** @param {string} fixStep */
-  async function performDemoFix(fixStep) {
-    const writesGit = ['git', 'argo-and-git', 'terminal'].includes(view.fix_surface);
-    const previousGit = demoGit;
-    if (writesGit) saveDemoGit({...demoGit, phase: 'committing'});
+  async function whilePaused() {
+    while (demoPaused && !demoStopped) await sleep(200);
+  }
+
+  /**
+   * Narrates what the repair is doing now. Call it before pointing: it re-renders the panel.
+   * @param {string} detail @param {string} [reason] @param {DemoNarration['phase']} [phase]
+   */
+  function narrateRepair(detail, reason, phase = 'doing') {
+    demoNarration = {id: demoStepId(), phase, detail, detailReason: reason || repairStep()?.why};
+    sessionStorage.setItem(demoNarrationKey, JSON.stringify(demoNarration));
+    message = '';
+    render();
+  }
+
+  /**
+   * Clicks a control that loads another page, where the step carries on at stage.
+   * @param {() => Element | null} control Looked up after narrating, which re-renders the panel.
+   * @param {string} stage @param {string} detail
+   */
+  async function clickToNavigate(control, stage, detail) {
+    narrateRepair(detail);
+    const what = detail.replace(/\.$/, '');
+    if (!control()) return fail(`${what}: the control is not on the page`);
+    const previous = demoRepair;
+    saveDemoRepair({...demoRepair, stage});
+    demoNavigating = true;
+    if (!await clickControl(control)) {
+      demoNavigating = false;
+      saveDemoRepair(previous);
+      return demoStopped ? 'stopped' : fail(`${what}: the control could not be clicked`);
+    }
+    // The next page continues the step; this one only resumes if it never loads.
+    await waitUntil(() => false, 20000);
+    demoNavigating = false;
+    return demoStopped ? 'stopped' : fail(`${what}: the page did not open`);
+  }
+
+  /**
+   * Clicks a control, looking it up again when a render replaces it while the
+   * pointer moves to it, as the panel does whenever the session changes.
+   * @param {() => Element | null} control @returns {Promise<boolean>}
+   */
+  async function clickControl(control) {
+    for (let attempt = 0; attempt < 3 && !demoStopped; attempt += 1) {
+      const target = control();
+      if (!target) return false;
+      if (await activate(target, true)) return true;
+      if (target.isConnected) return false;
+    }
+    return false;
+  }
+
+  const giteaButton = () => root.querySelector('[data-action="gitea"]');
+  const argoButton = () => root.querySelector('[data-action="argocd"]');
+  const onApplicationPage = () => location.pathname.includes(`/applications/argocd/${encodeURIComponent(view.application)}`);
+  /** @param {string} path */
+  const onGiteaFile = path => decodeURIComponent(location.pathname) === `${giteaRepository}/src/branch/main/${path}`;
+
+  // The lab terminal ------------------------------------------------------------
+
+  const terminalFrame = () => /** @type {HTMLIFrameElement | null} */ (dockRoot.querySelector('.terminal-dock iframe'));
+
+  /** The ttyd page's xterm terminal, once it has loaded. @returns {XtermTerminal | null} */
+  function terminalTerm() {
+    try { return /** @type {TtydWindow} */ (terminalFrame()?.contentWindow)?.term || null; }
+    catch (_) { return null; }
+  }
+
+  /** What the terminal's latest prompt reported. */
+  function terminalPrompt() {
+    let title = '';
+    try { title = terminalFrame()?.contentDocument?.title || ''; } catch (_) { return null; }
+    const match = title.match(terminalTitle);
+    return match ? {count: Number(match[1]), exit: Number(match[2]), head: match[3]} : null;
+  }
+
+  /** Puts the pointer on the terminal's cursor, where the next keystroke appears. @param {XtermTerminal} term */
+  function pointAtTerminalCursor(term) {
+    const frame = terminalFrame();
+    if (!frame) return;
+    const box = frame.getBoundingClientRect();
+    const screen = term.element?.querySelector('.xterm-screen')?.getBoundingClientRect() ||
+      {left: 0, top: 0, width: box.width, height: box.height};
+    const buffer = term.buffer.active;
+    const x = box.left + screen.left + (buffer.cursorX + .5) * screen.width / term.cols;
+    const y = box.top + screen.top + (buffer.cursorY + .6) * screen.height / term.rows;
+    pointer.style.left = `${Math.round(Math.min(x, box.right - 12))}px`;
+    pointer.style.top = `${Math.round(Math.min(y, box.bottom - 12))}px`;
+  }
+
+  /** Keeps the terminal highlighted while commands are typed and run; a panel render removes the frame. */
+  function highlightTerminal() {
+    const frame = terminalFrame();
+    if (!frame || root.querySelector('.spotlight[data-terminal]')) return;
+    spotlight(frame, null, true).dataset.terminal = '';
+  }
+
+  const clearTerminalHighlight = () => root.querySelectorAll('.spotlight[data-terminal]').forEach(frame => frame.remove());
+
+  // The pointer clicks the coach's own Open terminal button, as a learner would.
+  async function openTerminal() {
+    if (!terminalOpen || terminalMinimized) {
+      narrateRepair(terminalOpen ? 'Restore the lab terminal.' : 'Open the lab terminal.');
+      await clickControl(() => root.querySelector('[data-action="terminal"]'));
+      if (demoStopped) return false;
+      if (!terminalOpen || terminalMinimized) {
+        terminalOpen = true;
+        terminalMinimized = false;
+        renderDock();
+        render();
+      }
+    }
+    // ttyd connects, the session refreshes its checkout, then bash titles its first prompt.
+    return Boolean(await waitUntil(() => terminalTerm() && terminalPrompt(), 45000));
+  }
+
+  async function minimizeTerminal() {
+    if (!terminalOpen || terminalMinimized || demoStopped) return;
+    const minimize = dockRoot.querySelector('[data-action="minimize-terminal"]');
+    if (minimize) await activate(minimize, true);
+    if (!terminalMinimized && !demoStopped) {
+      terminalMinimized = true;
+      renderDock();
+      render();
+    }
+  }
+
+  /**
+   * Types text into the lab terminal a character at a time, with the pointer
+   * at the cursor and the terminal highlighted, through ttyd's own terminal so
+   * the shell echoes it on screen. Pause holds the typing; Stop ends it.
+   * @param {string} text
+   */
+  async function typeIntoTerminal(text) {
+    const term = terminalTerm();
+    const frame = terminalFrame();
+    if (!term || !frame || demoStopped) return false;
+    highlightTerminal();
+    if (!pointer.style.left) {
+      const panel = root.querySelector('.panel')?.getBoundingClientRect();
+      pointer.style.left = `${panel?.left ?? innerWidth - 80}px`;
+      pointer.style.top = `${panel?.top ?? 80}px`;
+    }
+    clearTimeout(pointerTimer);
+    pointer.removeAttribute('data-click');
+    pointer.dataset.visible = 'true';
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    pointAtTerminalCursor(term);
+    term.focus();
+    await sleep(700);
+    for (const char of text) {
+      await whilePaused();
+      if (demoStopped || terminalTerm() !== term) return false;
+      term.input(char, true);
+      await sleep(demoTypingDelay);
+      highlightTerminal();
+      pointAtTerminalCursor(term);
+    }
+    return true;
+  }
+
+  /**
+   * Types a command, presses Enter, and waits for the shell's next prompt.
+   * @param {string} command @param {number} [timeout]
+   * @returns {Promise<{exit: number, head: string, output: string} | null>}
+   */
+  async function runTerminalCommand(command, timeout = 120000) {
+    const before = terminalPrompt();
+    if (!before || !await typeIntoTerminal(command)) return null;
+    const term = terminalTerm();
+    // Let the shell echo the last keystrokes before marking where the output starts.
+    await sleep(250);
+    await whilePaused();
+    if (demoStopped || !term) return null;
+    const typed = term.buffer.active;
+    const commandEnd = typed.baseY + typed.cursorY;
+    term.input('\r', true);
+    const after = await waitUntil(() => {
+      highlightTerminal();
+      const prompt = terminalPrompt();
+      return prompt && prompt.count > before.count ? prompt : null;
+    }, timeout, 100);
+    if (!after || terminalTerm() !== term) return null;
+    const buffer = term.buffer.active;
+    /** @type {string[]} */
+    const lines = [];
+    for (let row = commandEnd + 1; row < buffer.baseY + buffer.cursorY; row += 1) {
+      const line = buffer.getLine(row);
+      if (!line) continue;
+      if (line.isWrapped && lines.length) lines[lines.length - 1] += line.translateToString(true);
+      else lines.push(line.translateToString(true));
+    }
+    clearTimeout(pointerTimer);
+    pointerTimer = setTimeout(() => { pointer.removeAttribute('data-visible'); }, 2700);
+    return {exit: after.exit, head: after.head, output: lines.join('\n')};
+  }
+
+  /**
+   * The terminal keeps its checkout between missions. Start from a current
+   * checkout and keep anyone's earlier work recoverable: uncommitted changes go
+   * to the stash. Returns why the checkout cannot be used, or null.
+   */
+  async function prepareCheckout() {
+    narrateRepair('Check the terminal\'s Git checkout before editing.',
+      'The lab terminal keeps its checkout between missions, so it may hold someone\'s unfinished changes.');
+    const status = await runTerminalCommand('git status --short --branch');
+    if (demoStopped) return null;
+    if (!status || status.exit) return 'The terminal could not show the checkout\'s status';
+    const [branch = '', ...changes] = status.output.split('\n').filter(line => line.trim());
+    if (/\bahead \d+/.test(branch)) return 'The terminal checkout has unpushed commits from earlier work';
+    if (changes.length) {
+      narrateRepair('Stash the uncommitted changes left in the checkout.',
+        'The stash keeps them, and git stash pop restores them; the repair starts from a clean checkout.');
+      const stash = await runTerminalCommand('git stash push --include-untracked --message "before demo"');
+      if (demoStopped) return null;
+      if (!stash || stash.exit) return 'The terminal could not stash the earlier changes';
+    }
+    narrateRepair('Update the checkout from the lab repository.',
+      'Editing the newest commit on main lets the push fast-forward.');
+    const pull = await runTerminalCommand('git pull --ff-only');
+    if (demoStopped) return null;
+    if (!pull || pull.exit) return 'The terminal checkout could not fast-forward to main';
+    return null;
+  }
+
+  /** @param {RepairStep} step @returns {Promise<RepairOutcome>} */
+  async function runCommands(step) {
+    try { return await typeCommands(step); }
+    finally { clearTerminalHighlight(); }
+  }
+
+  /** @param {RepairStep} step @returns {Promise<RepairOutcome>} */
+  async function typeCommands(step) {
+    if (demoRepair.stage !== 'terminal') saveDemoRepair({...demoRepair, stage: 'terminal'});
+    if (!await openTerminal()) return demoStopped ? 'stopped' : fail('The lab terminal did not open');
+    if (!demoRepair.checkoutReady) {
+      const problem = await prepareCheckout();
+      if (demoStopped) return 'stopped';
+      if (problem) return fail(problem);
+      saveDemoRepair({...demoRepair, checkoutReady: true});
+    }
+    narrateRepair(step.what);
+    for (let index = demoRepair.command; index < step.commands.length; index += 1) {
+      const command = step.commands[index];
+      const result = await runTerminalCommand(command);
+      if (demoStopped) return 'stopped';
+      if (!result) return fail(`The terminal did not finish ${command}`);
+      if (result.exit) return fail(`${command} exited with status ${result.exit}`);
+      // After the commit and push, HEAD is the repair's commit.
+      saveDemoRepair({...demoRepair, command: index + 1, commit: result.head});
+    }
+    // A person tucks the terminal away before using Argo CD or Gitea again.
+    clearTerminalHighlight();
+    await minimizeTerminal();
+    return 'done';
+  }
+
+  // Gitea -----------------------------------------------------------------------
+
+  /** @param {RepairStep} step @returns {Promise<RepairOutcome>} */
+  async function viewSource(step) {
+    const stage = demoRepair.stage;
+    if (!stage) return clickToNavigate(giteaButton, 'opening', `Open ${step.path} in Git with View Git source.`);
+    if (stage === 'opening') {
+      if (!onGiteaFile(step.path)) return fail(`Gitea did not open ${step.path}`);
+      const line = await waitUntil(() => Array.from(document.querySelectorAll('main code.code-inner, [role="main"] code.code-inner'))
+        .find(code => visible(code) && code.textContent?.includes(step.find)), 5000);
+      if (!line) return fail(`Gitea did not show ${step.find} in ${step.path}`);
+      narrateRepair(`${step.path} refers to ${step.find}.`, step.why, 'learning');
+      await pointAt(line);
+      saveDemoRepair({...demoRepair, stage: 'shown'});
+      return 'read';
+    }
+    if (stage === 'shown') return clickToNavigate(argoButton, 'returning', 'Return to Argo CD.');
+    return onApplicationPage() ? 'done' : fail('Argo CD did not open the Application');
+  }
+
+  /** @param {RepairStep} step @returns {Promise<RepairOutcome>} */
+  async function viewCommit(step) {
+    const stage = demoRepair.stage;
+    if (!stage) return clickToNavigate(giteaButton, 'opening', `Open ${step.path} in Git with View Git source.`);
+    if (stage === 'opening') {
+      if (!onGiteaFile(step.path)) return fail(`Gitea did not open ${step.path}`);
+      const latest = await waitUntil(() => Array.from(document.querySelectorAll('.latest-commit a.commit-id-short')).find(visible), 5000);
+      const commit = (latest?.getAttribute('href') || '').split('/commit/')[1] || '';
+      if (!latest) return fail('Gitea did not show the file\'s latest commit');
+      if (/^[0-9a-f]{40}$/.test(demoRepair.commit || '') && commit !== demoRepair.commit) {
+        return fail(`Gitea's latest commit for ${step.path} is not the one just pushed`);
+      }
+      return clickToNavigate(() => latest, 'commit', `Open the latest commit, ${commit.slice(0, 10)}, which was just pushed.`);
+    }
+    if (stage === 'commit') {
+      if (!location.pathname.startsWith(`${giteaRepository}/commit/`)) return fail('Gitea did not open the commit');
+      const file = await waitUntil(() => Array.from(document.querySelectorAll('.diff-file-box'))
+        .find(box => box.getAttribute('data-new-filename') === step.path && visible(box)), 5000);
+      if (!file) return fail(`The commit does not change ${step.path}`);
+      const changes = Array.from(file.querySelectorAll('tr.del-code, tr.add-code')).filter(visible);
+      const commit = location.pathname.split('/commit/')[1]?.slice(0, 10);
+      narrateRepair(`Commit ${commit} changes ${step.path}.`, step.why, 'learning');
+      await pointAt(changes[0]?.querySelector('code') || file.querySelector('.file-link') || file, false, changes.at(-1) || null);
+      saveDemoRepair({...demoRepair, stage: 'reviewed'});
+      return 'read';
+    }
+    if (stage === 'reviewed') return clickToNavigate(argoButton, 'returning', 'Return to Argo CD.');
+    return onApplicationPage() ? 'done' : fail('Argo CD did not open the Application');
+  }
+
+  // Argo CD ---------------------------------------------------------------------
+
+  /** The Application as Argo CD's API reports it. @returns {Promise<ArgoApplication>} */
+  async function argoApplication() {
+    const token = localStorage.getItem('argocd.token');
+    const response = await fetch(`/argocd/api/v1/applications/${encodeURIComponent(view.application)}?appNamespace=argocd`,
+      {headers: token ? {Authorization: `Bearer ${token}`} : {}});
+    if (!response.ok) throw new Error(`Argo CD returned ${response.status}`);
+    return response.json();
+  }
+
+  /** @param {ArgoApplication} app */
+  const operationRunning = app => ['Running', 'Terminating'].includes(app?.status?.operationState?.phase);
+
+  /** @param {ArgoApplication} app @param {RepairResource} resource */
+  const listedResource = (app, resource) => (app?.status?.resources || []).find(item => item.kind === resource.kind &&
+    item.name === resource.name && (item.namespace || '') === resource.namespace);
+
+  const openedPanel = () => Array.from(document.querySelectorAll('.sliding-panel--opened')).find(visible) || null;
+
+  async function closeArgoPanels() {
+    for (let attempt = 0; attempt < 3 && !demoStopped; attempt += 1) {
+      const close = openedPanel()?.querySelector('.sliding-panel__close');
+      if (!close) return true;
+      await activate(close, true);
+      await waitUntil(() => !close.isConnected || !visible(close), 3000);
+    }
+    return !openedPanel();
+  }
+
+  /** From another Argo CD page, a person opens the Application from the sidebar and its tile. */
+  async function openApplication() {
+    if (onApplicationPage()) return true;
+    if (!location.pathname.startsWith('/argocd/')) return false;
+    const findCard = () => {
+      const label = Array.from(document.querySelectorAll('body *')).find(element =>
+        element.childElementCount === 0 && element.textContent?.trim() === view.application && visible(element));
+      return label?.closest('a[href]') || label || null;
+    };
+    let card = findCard();
+    if (!card) {
+      const applications = argoSidebarItem('Applications');
+      if (!applications) return false;
+      narrateRepair('Open Applications in the Argo CD sidebar.');
+      if (!await activate(applications, true)) return false;
+      card = await waitUntil(findCard, 10000);
+    }
+    if (!card) return false;
+    narrateRepair(`Open the ${view.application} Application.`);
+    await activate(card, true);
+    return Boolean(await waitUntil(() => onApplicationPage() &&
+      document.querySelector('.application-status-panel, .application-resource-tree__node-title'), 15000));
+  }
+
+  /** Opens the Application with no Argo drawer over its controls. */
+  async function readyApplication() {
+    if (!await openApplication()) return false;
+    return closeArgoPanels();
+  }
+
+  /**
+   * Types into an Argo CD form field a character at a time, with the pointer on
+   * it. Argo's forms are React components that track each input's value, so
+   * set it through the native setter and report every change with an input event.
+   * @param {HTMLInputElement} field @param {string} text
+   */
+  async function typeIntoArgoField(field, text) {
+    if (!await pointAt(field)) return false;
+    clearTimeout(pointerTimer);
+    pointer.dataset.visible = 'true';
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    /** @param {string} value */
+    const enter = value => {
+      setValue.call(field, value);
+      field.dispatchEvent(new Event('input', {bubbles: true}));
+    };
+    field.focus({preventScroll: true});
+    field.select();
+    await sleep(300);
+    enter('');
+    for (const char of text) {
+      await whilePaused();
+      if (demoStopped || !field.isConnected) return false;
+      enter(field.value + char);
+      await sleep(demoTypingDelay);
+    }
+    pointerTimer = setTimeout(() => { pointer.removeAttribute('data-visible'); }, 1200);
+    return field.value === text;
+  }
+
+  /** @param {RepairStep} step @returns {Promise<RepairOutcome>} */
+  async function terminateOperation(step) {
+    if (!operationRunning(await argoApplication())) {
+      return {skipped: 'No sync operation is running, so there is nothing to terminate.'};
+    }
+    if (!await readyApplication()) return fail('Argo CD did not open the Application');
+    narrateRepair(`Open Sync Status on ${view.application}.`);
+    const status = exactControl('Sync Status');
+    if (!status || !await activate(status, true)) return fail('Sync Status could not be opened');
+    const terminate = await waitUntil(() => openedPanel() && exactControl('Terminate', openedPanel()), 10000);
+    if (!terminate) {
+      if (!operationRunning(await argoApplication())) {
+        await closeArgoPanels();
+        return {skipped: 'The operation ended on its own, so there is nothing to terminate.'};
+      }
+      return fail('Sync Status shows no Terminate button');
+    }
+    narrateRepair('Terminate the running operation.');
+    await activate(terminate, true);
+    const confirm = await waitUntil(() => Array.from(document.querySelectorAll(
+      '.popup-container [qe-id="argo-popup-ok-button"]')).find(visible), 5000);
+    if (!confirm) return fail('Argo CD did not ask to confirm the termination');
+    narrateRepair('Confirm the termination with OK.');
+    await activate(confirm, true);
+    if (!await waitUntil(async () => !operationRunning(await argoApplication()), 30000, 1000)) {
+      return fail('The operation did not stop');
+    }
+    const result = openedPanel() && Array.from(openedPanel().querySelectorAll('*'))
+      .find(element => !element.childElementCount && /operation terminated/i.test(element.textContent || '') && visible(element));
+    narrateRepair('Argo CD terminated the operation.', step.why, 'learning');
+    if (result) await pointAt(result);
+    await closeArgoPanels();
+    return 'done';
+  }
+
+  /** @param {RepairStep} step @returns {Promise<RepairOutcome>} */
+  async function syncApplication(step) {
+    const commit = demoRepair.commit || '';
+    narrateRepair(`Wait for Argo CD to compare commit ${commit.slice(0, 7)} and finish any operation it started.`);
+    const before = await waitUntil(async () => {
+      const app = await argoApplication();
+      const compared = !/^[0-9a-f]{40}$/.test(commit) || app?.status?.sync?.revision === commit;
+      return compared && !operationRunning(app) ? app : null;
+    }, 180000, 3000);
+    if (!before) return fail('Argo CD did not compare the pushed commit');
+    await refresh();
+    if (view.fixed) return {skipped: 'Argo CD has already synced the repaired revision.'};
+    if (!await readyApplication()) return fail('Argo CD did not open the Application');
+    narrateRepair(`Open Sync on ${view.application}.`);
+    const sync = exactControl('Sync');
+    if (!sync || !await activate(sync, true)) return fail('Sync could not be opened');
+    const synchronize = await waitUntil(() => Array.from(document.querySelectorAll(
+      '[qe-id="application-sync-panel-button-synchronize"]')).find(visible), 10000);
+    if (!synchronize) return fail('The Sync panel did not open');
+    narrateRepair('Synchronize.', step.why);
+    await activate(synchronize, true);
+    const started = await waitUntil(async () => (await argoApplication())?.status?.operationState?.startedAt !==
+      before.status?.operationState?.startedAt, 15000, 1000);
+    return started ? 'done' : fail('Argo CD did not start the sync');
+  }
+
+  /** @param {RepairStep} step @returns {Promise<RepairOutcome>} */
+  async function inspectDiff(step) {
+    const resource = step.resource;
+    if (demoRepair.stage === 'shown') {
+      await closeArgoPanels();
+      return 'done';
+    }
+    narrateRepair('Wait for Argo CD to compare the pushed commit.');
+    const pending = await waitUntil(async () => listedResource(await argoApplication(), resource)?.requiresPruning, 180000, 3000);
+    if (!pending) return fail(`Argo CD does not list ${resource.kind} ${resource.name} for pruning`);
+    if (!await readyApplication()) return fail('Argo CD did not open the Application');
+    narrateRepair(`Open Diff on ${view.application}.`);
+    const diff = await waitUntil(() => {
+      const button = /** @type {HTMLButtonElement} */ (exactControl('Diff'));
+      return button && !button.disabled ? button : null;
+    }, 15000);
+    if (!diff) return fail('Diff could not be opened');
+    await activate(diff, true);
+    if (!await waitForDemoContent('app.diff')) return fail('Diff did not open');
+    const entry = Array.from(document.querySelectorAll('.application-resources-diff *')).find(element =>
+      !element.childElementCount && element.textContent?.includes(resource.name) && visible(element));
+    narrateRepair(`Only ${resource.kind} ${resource.name} is left to remove.`, step.why, 'learning');
+    if (entry) await pointAt(entry);
+    saveDemoRepair({...demoRepair, stage: 'shown'});
+    return 'read';
+  }
+
+  /** @param {RepairStep} step @returns {Promise<RepairOutcome>} */
+  async function pruneResource(step) {
+    const resource = step.resource;
+    const name = `${resource.group}/${resource.kind}/${resource.namespace}/${resource.name}`;
+    if (!listedResource(await argoApplication(), resource)) {
+      return {skipped: `${resource.kind} ${resource.name} is already gone.`};
+    }
+    if (!await readyApplication()) return fail('Argo CD did not open the Application');
+    narrateRepair(`Open Sync on ${view.application}.`);
+    const sync = exactControl('Sync');
+    if (!sync || !await activate(sync, true)) return fail('Sync could not be opened');
+    const panel = await waitUntil(() => {
+      const opened = openedPanel();
+      return opened?.querySelector('[qe-id="application-sync-panel-button-synchronize"]') ? opened : null;
+    }, 10000);
+    if (!panel) return fail('The Sync panel did not open');
+    narrateRepair('Clear the resource selection with Synchronize resources: none.');
+    const none = Array.from(panel.querySelectorAll('a')).find(link => link.textContent?.trim() === 'none' && visible(link));
+    if (!none) return fail('The Sync panel has no way to clear its selection');
+    await activate(none, true);
+    narrateRepair(`Select only ${name}.`);
+    const label = await waitUntil(() => Array.from(panel.querySelectorAll('label'))
+      .find(item => item.textContent?.trim() === name && visible(item)), 5000);
+    if (!label) return fail(`The Sync panel does not list ${name}`);
+    await activate(label, true);
+    const prune = /** @type {HTMLLabelElement} */ (Array.from(panel.querySelectorAll('label'))
+      .find(item => /^sync-option-Prune-/.test(item.getAttribute('for') || '')));
+    const pruneBox = /** @type {HTMLInputElement} */ (prune && document.getElementById(prune.htmlFor));
+    if (!prune || !pruneBox) return fail('The Sync panel has no Prune option');
+    narrateRepair('Turn on Prune, so the sync deletes what Git no longer contains.');
+    if (!pruneBox.checked) await activate(prune, true);
+    // Check the selection before deleting anything: only the leftover resource, with Prune.
+    const selected = Array.from(panel.querySelectorAll('.application-sync-panel__resource input[type="checkbox"]'))
+      .filter(box => /** @type {HTMLInputElement} */ (box).checked).map(box => box.id);
+    if (selected.join('\n') !== name || !pruneBox.checked) {
+      await closeArgoPanels();
+      return fail(`The Sync selection was not only ${name} with Prune`);
+    }
+    narrateRepair('Synchronize.', step.why);
+    await activate(panel.querySelector('[qe-id="application-sync-panel-button-synchronize"]'), true);
+    // Argo CD asks for the word prune before it deletes anything.
+    const confirmation = () => Array.from(document.querySelectorAll('.popup-container'))
+      .find(popup => visible(popup) && popup.querySelector('input')) || null;
+    const asked = await waitUntil(confirmation, 10000);
+    if (asked) {
+      const field = /** @type {HTMLInputElement} */ (asked.querySelector('input'));
+      narrateRepair(`Argo CD lists ${resource.kind}/${resource.name} to be deleted and asks for the word prune to confirm.`);
+      if (!await typeIntoArgoField(field, 'prune')) return demoStopped ? 'stopped' : fail('The prune confirmation could not be typed');
+      const ok = Array.from(asked.querySelectorAll('button')).find(button =>
+        /popup-ok-button$/.test(button.getAttribute('qe-id') || '') || button.textContent?.trim().toUpperCase() === 'OK');
+      narrateRepair('Confirm with OK.', step.why);
+      if (!ok || !await activate(ok, true)) return fail('The prune confirmation could not be confirmed');
+    }
+    if (!await waitUntil(async () => !listedResource(await argoApplication(), resource), 120000, 2000)) {
+      return fail(`Argo CD did not remove ${resource.kind} ${resource.name}`);
+    }
+    narrateRepair(`Argo CD pruned ${resource.kind} ${resource.name}.`, step.why, 'learning');
+    return 'done';
+  }
+
+  /** @param {RepairStep} step @returns {Promise<RepairOutcome>} */
+  async function setRepoURL(step) {
+    if (!await readyApplication()) return fail('Argo CD did not open the Application');
+    narrateRepair(`Open Details on ${view.application}.`);
+    const details = exactControl('Details');
+    if (!details || !await activate(details, true)) return fail('Details could not be opened');
+    const source = () => Array.from(document.querySelectorAll('.sliding-panel--opened .editable-panel'))
+      .find(panel => visible(panel) && /REPO URL/.test(panel.textContent || '')) || null;
+    if (!await waitUntil(source, 15000)) return fail('Details does not show the Application source');
+    narrateRepair('Edit the Source section.');
+    const edit = exactControl('Edit', source());
+    if (!edit || !await activate(edit, true)) return fail('The Source section could not be edited');
+    const field = /** @type {HTMLInputElement} */ (await waitUntil(() => Array.from(source()?.querySelectorAll('.white-box__details-row') || [])
+      .find(row => row.querySelector('.columns.small-3')?.textContent?.trim() === 'REPO URL')
+      ?.querySelector('input.argo-field'), 5000));
+    if (!field) return fail('The Source section has no Repo URL field');
+    narrateRepair(`Set Repo URL to ${step.value}.`);
+    if (!await typeIntoArgoField(field, step.value)) return demoStopped ? 'stopped' : fail('The Repo URL could not be typed');
+    narrateRepair('Save the Application source.');
+    const save = exactControl('Save', source());
+    if (!save || !await activate(save, true)) return fail('The source could not be saved');
+    const saved = await waitUntil(() => {
+      const panel = source();
+      return panel && !panel.querySelector('input.argo-field') && panel.textContent?.includes(step.value) ? panel : null;
+    }, 15000);
+    if (!saved) return fail('Argo CD did not save the Repo URL');
+    const url = Array.from(saved.querySelectorAll('*')).find(element =>
+      !element.childElementCount && element.textContent?.trim() === step.value && visible(element));
+    narrateRepair(`Repo URL is now ${step.value}.`, step.why, 'learning');
+    if (url) await pointAt(url);
+    await closeArgoPanels();
+    return 'done';
+  }
+
+  /** @param {RepairStep} step @returns {Promise<RepairOutcome>} */
+  async function refreshApplication(step) {
+    if (!await readyApplication()) return fail('Argo CD did not open the Application');
+    narrateRepair(`Refresh ${view.application}.`, step.why);
+    const refreshButton = Array.from(document.querySelectorAll('.argo-split-button__primary')).find(visible) ||
+      exactControl('Refresh');
+    if (!refreshButton || !await activate(refreshButton, true)) return fail('Refresh could not be clicked');
+    await sleep(1500);
+    return 'done';
+  }
+
+  /** @type {Record<RepairStep['action'], (step: RepairStep) => Promise<RepairOutcome>>} */
+  const repairActions = {
+    'run-commands': runCommands, 'view-source': viewSource, 'view-commit': viewCommit,
+    'terminate-operation': terminateOperation, 'sync': syncApplication, 'diff': inspectDiff,
+    'prune': pruneResource, 'set-repo-url': setRepoURL, 'refresh': refreshApplication,
+  };
+
+  async function startRepair() {
+    /** @type {RepairPlan} */
+    let plan;
+    try {
+      plan = await request(`${sessionPath}/repair-plan`);
+      if (!plan?.steps?.length) throw new Error('the plan has no steps');
+    } catch (reason) {
+      await fallBack(null, `The repair plan could not be loaded: ${reason.message}`);
+      return;
+    }
+    saveDemoRepair({plan, step: 0, stage: null, command: 0});
+    setDemoNarration(demoStepId(), 'what');
+  }
+
+  async function driveRepair() {
+    const step = repairStep();
+    if (!step) return;
+    await whilePaused();
+    if (demoStopped) return;
+    /** @type {RepairOutcome} */
+    let outcome;
+    try { outcome = await repairActions[step.action](step); }
+    catch (reason) { outcome = fail(reason.message); }
+    if (demoStopped || typeof outcome === 'string' && outcome !== 'done') return;
+    if (typeof outcome === 'object' && 'failed' in outcome) {
+      await fallBack(step, outcome.failed);
+      return;
+    }
+    const next = demoRepair.step + 1;
+    saveDemoRepair({...demoRepair, step: next, stage: null, command: 0});
+    setDemoNarration(next < demoRepair.plan.steps.length ? demoStepId() : `fix:${view.scenario.id}`,
+      next < demoRepair.plan.steps.length ? 'what' : 'learning');
+    if (typeof outcome === 'object') say(outcome.skipped);
+    if (next >= demoRepair.plan.steps.length) await refresh();
+  }
+
+  /**
+   * A step could not finish: say why, record it, and apply the controller's
+   * reference repair so the demonstration still ends.
+   * @param {RepairStep | null} step @param {string} reason
+   */
+  async function fallBack(step, reason) {
+    demoNavigating = false;
+    const details = {step: step?.id || 'plan', action: step?.action || 'repair-plan', reason};
+    console.warn('[coach-fallback]', JSON.stringify(details));
+    sendAction('demo_fallback', details);
+    if (demoRepair) saveDemoRepair({...demoRepair, fellBack: details.step});
+    await refresh();
+    if (view.fixed) {
+      say(`${reason}. The repair has already reached Argo CD, so the demonstration continues.`);
+      return;
+    }
+    await performDemoFix(`fix:${view.scenario.id}`, `${reason}, so the coach applied the repair for you.`);
+  }
+
+  /**
+   * The scenario controller's reference repair, used only when a demonstrated step cannot finish.
+   * @param {string} fixStep @param {string} notice
+   */
+  async function performDemoFix(fixStep, notice) {
     demoFixStarted = true;
     sessionStorage.setItem(demoFixKey, 'true');
     setDemoNarration(fixStep, 'doing');
+    say(notice);
     /** @type {DemonstrateFixResponse} */
     let result;
     try { result = await request(sessionPath + '/demonstrate-fix', {method: 'POST', body: '{}'}); }
     catch (reason) {
       demoFixStarted = false;
       sessionStorage.removeItem(demoFixKey);
-      if (writesGit) saveDemoGit(previousGit?.source ? {...previousGit, phase: 'commit'} : null);
       throw reason;
     }
     if (demoStopped) return;
     demoPatch = {commit: result.commit || '', diff: result.diff || ''};
     sessionStorage.setItem(demoPatchKey, JSON.stringify(demoPatch));
-    const commitURL = writesGit && gitCommitURL(demoPatch.commit);
-    if (commitURL) {
-      saveDemoGit({phase: 'review', commit: demoPatch.commit, source: previousGit?.source});
-      setDemoNarration(fixStep, 'locate');
-      navigateDemo(commitURL);
-      return;
-    }
-    saveDemoGit(null);
     setDemoNarration(fixStep, 'learning');
+    say(notice);
     await demoWait();
     if (!demoStopped) await refresh();
   }
@@ -2016,48 +2736,8 @@
       const expectedStep = demoStepId();
       await sending;
       if (demoStopped || view.feedback || !ready() || expectedStep !== demoStepId()) return;
-      const fixStep = `fix:${view.scenario.id}`;
-      if (demoGit?.phase === 'source') {
-        if (location.pathname !== demoGit.source) { navigateDemo(demoGit.source); return; }
-        const target = gitPageTarget();
-        if (target) await pointAt(target);
-        if (demoStopped) return;
-        saveDemoGit({...demoGit, phase: 'commit'});
-        setDemoNarration(fixStep, 'what');
-        return;
-      }
-      if (demoGit?.phase === 'commit') {
-        if (location.pathname !== demoGit.source) { navigateDemo(demoGit.source); return; }
-        if (demoFixStarted) { saveDemoGit({...demoGit, phase: 'committing'}); return; }
-        await performDemoFix(fixStep);
-        return;
-      }
-      if (demoGit?.phase === 'committing') {
-        // A page reload can interrupt the HTTP response after the push succeeds.
-        // The deployed revision still identifies that real commit once Argo is fixed.
-        const commit = demoPatch?.commit || (view.fixed ? view.revision : '');
-        const commitURL = gitCommitURL(commit);
-        if (commitURL) {
-          saveDemoGit({...demoGit, phase: 'review', commit});
-          setDemoNarration(fixStep, 'locate');
-          navigateDemo(commitURL);
-        } else await refresh();
-        return;
-      }
-      if (demoGit?.phase === 'review') {
-        const commitURL = gitCommitURL(demoGit.commit);
-        if (!commitURL) { saveDemoGit(null); await refresh(); return; }
-        if (location.pathname !== commitURL) { navigateDemo(commitURL); return; }
-        const target = gitPageTarget();
-        if (target) await pointAt(target);
-        if (demoStopped) return;
-        saveDemoGit({...demoGit, phase: 'return'});
-        setDemoNarration(fixStep, 'learning');
-        return;
-      }
-      if (demoGit?.phase === 'return') {
-        saveDemoGit(null);
-        navigateDemo(`/argocd/applications/argocd/${encodeURIComponent(view.application)}`);
+      if (repairStep()) {
+        await driveRepair();
         return;
       }
       const check = view.next_check;
@@ -2072,13 +2752,8 @@
         } else if (check.demonstration_answer) {
           await showDemoFinding(check);
         }
-      } else if (!view.fixed && view.scenario.level !== 1 && !demoFixStarted) {
-        const source = gitSourceURL();
-        if (source) {
-          saveDemoGit({phase: 'source', source});
-          setDemoNarration(fixStep, 'locate');
-          navigateDemo(source);
-        } else await performDemoFix(fixStep);
+      } else if (!view.fixed && view.scenario.level !== 1 && !demoFixStarted && !demoRepair) {
+        await startRepair();
       } else if (view.fixed && view.checks_passed >= view.checks_total) {
         if (!noteOpen) {
           say('Writing the incident note.');
@@ -2167,8 +2842,9 @@
       else terminalMinimized = !terminalMinimized;
       renderDock(); render();
     }
+    else if (action === 'argocd') location.href = `/argocd/applications/argocd/${encodeURIComponent(view.application)}`;
     else if (action === 'gitea') {
-      const path = view.fix_paths?.[0] || '';
+      const path = eventElement(event).closest('[data-action]').dataset.path || view.fix_paths?.[0] || '';
       const destination = `/gitea/remotelab/django-app/src/branch/main/${path}`;
       if (sessionStorage.getItem('argo-coach:gitea-authenticated') === 'true') {
         location.href = destination;

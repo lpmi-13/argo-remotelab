@@ -115,6 +115,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.reset(w, parts[2], r)
 	case len(parts) == 4 && parts[0] == "api" && parts[1] == "runs" && parts[3] == "reference-fix" && r.Method == http.MethodPost:
 		s.referenceFix(w, parts[2])
+	case len(parts) == 4 && parts[0] == "api" && parts[1] == "runs" && parts[3] == "repair-plan" && r.Method == http.MethodGet:
+		s.repairPlan(w, parts[2])
 	default:
 		respondError(w, 404, errors.New("not found"))
 	}
@@ -850,6 +852,35 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request) {
 	}
 	probe["other_application_healthy"] = othersHealthy
 	respond(w, 200, probe)
+}
+
+// The repair a person makes for this run, which a Demonstration performs
+// through Argo CD, Gitea and the lab terminal. The controller injected the
+// fault, so the plan matches the run's seeded variant and environment.
+func (s *Server) repairPlan(w http.ResponseWriter, id string) {
+	s.mu.Lock()
+	run := s.runs[id]
+	var input scenarios.RepairInput
+	if run != nil {
+		input = scenarios.RepairInput{Scenario: run.Scenario, Environment: run.Environment,
+			Application: run.Application, Namespace: namespaceFor(run.Environment),
+			ChartPath: chartFor(run.Environment), RepoURL: normalRepoURL, Seed: run.Seed}
+	}
+	s.mu.Unlock()
+	if run == nil {
+		respondError(w, 404, errors.New("run not found"))
+		return
+	}
+	if isLevelOne(input.Scenario) {
+		respondError(w, 409, errors.New("Level 1 missions have no repair step"))
+		return
+	}
+	plan, err := scenarios.BuildRepairPlan(input)
+	if err != nil {
+		respondError(w, 500, err)
+		return
+	}
+	respond(w, 200, plan)
 }
 
 func (s *Server) referenceFix(w http.ResponseWriter, id string) {

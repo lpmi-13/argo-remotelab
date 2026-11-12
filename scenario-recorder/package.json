@@ -11,6 +11,7 @@
     "guided": "node guided-terminal.mjs",
     "demo": "node demo-playback.mjs",
     "readme-demo": "node readme-demo.mjs",
+    "audit": "node demo-audit.mjs",
     "test": "node --test coach-ui.test.mjs"
   },
   "dependencies": {

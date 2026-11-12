@@ -31,8 +31,8 @@ interface CoachNetworkDetail {
   method: string;
   path: string;
   search: string;
-  /** Present for POST .../sync. */
-  sync?: {prune: boolean; dryRun: boolean; resources: {kind: string; name: string}[]};
+  /** Present for POST .../sync, reported once Argo CD answers; accepted is false when it refused the sync. */
+  sync?: {prune: boolean; dryRun: boolean; resources: {kind: string; name: string}[]; accepted?: boolean};
 }
 
 /** Records one learner action; coach.js sends it to the learning service. */

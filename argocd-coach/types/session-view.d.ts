@@ -231,6 +231,49 @@ interface RunCreatedResponse {
   session: NewSessionView;
 }
 
+/** A Kubernetes resource a repair step acts on. */
+interface RepairResource {
+  group: string;
+  kind: string;
+  namespace: string;
+  name: string;
+}
+
+/**
+ * One action a person takes to repair the run, which a Demonstration performs
+ * through the same Argo CD controls, Gitea pages and terminal commands.
+ * scenario-controller/internal/scenarios/repair_plan.go documents each action.
+ */
+interface RepairStep {
+  id: string;
+  surface: 'argo' | 'terminal' | 'gitea';
+  action: 'view-source' | 'view-commit' | 'run-commands' | 'terminate-operation' | 'sync' | 'refresh' |
+    'set-repo-url' | 'diff' | 'prune';
+  what: string;
+  why: string;
+  /** run-commands: typed in order in the lab terminal. */
+  commands?: string[];
+  /** view-source and view-commit: the chart file to open in Gitea. */
+  path?: string;
+  /** view-source: the text to point at. */
+  find?: string;
+  /** set-repo-url: the working repository URL. */
+  value?: string;
+  /** diff and prune: the resource to remove. */
+  resource?: RepairResource;
+  /** A condition the step needs; without it the step is skipped. */
+  when?: 'operation-running' | 'not-fixed';
+}
+
+/** GET /api/sessions/{id}/repair-plan, Demonstration only. */
+interface RepairPlan {
+  scenario: string;
+  application: string;
+  /** Empty when the repair does not change the chart. */
+  chart_path: string;
+  steps: RepairStep[];
+}
+
 /** POST /api/sessions/{id}/demonstrate-fix response (the controller's reference fix). */
 interface DemonstrateFixResponse {
   commit?: string;

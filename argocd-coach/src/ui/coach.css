@@ -12,6 +12,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .panel[data-doing] { border-left: 5px solid var(--coach-doing-accent); }
 :host([data-native-overlay]) .panel { left: 12px; right: auto; width: min(280px, calc(100vw - 24px)); }
 .panel[data-collapsed] { width: auto; max-height: none; overflow: visible; }
+/* Beside an Argo dialog it cannot avoid, the coach keeps only what it is doing,
+   on a few wide lines that fit above or below the dialog. */
+:host([data-compact]) .panel { width: min(560px, calc(100vw - 24px)); }
+:host([data-compact]) .panel .body > :not(.step-card),
+:host([data-compact]) .panel .demo-explanation > div:not(:first-child) { display: none; }
+:host([data-compact]) .panel .step-card { margin-top: 4px; }
 .panel[data-collapsed] .panel-controls { padding-bottom: 9px; }
 .header { display: flex; align-items: center; gap: 8px; padding: 11px 14px; border-bottom: 1px solid var(--coach-border); }
 .panel-controls { justify-content: flex-end; border-bottom: 0; padding: 9px 11px 0; }

@@ -4,7 +4,7 @@ async (page) => {
     const response = await fetch('/coach/learning/api/catalog');
     if (!response.ok) throw new Error(`catalog returned ${response.status}`);
     const data = await response.json();
-    return data.scenarios.map(({id, level}) => [id, level]);
+    return data.scenarios.map(({id, level, fix_surface: surface}) => [id, level, surface]);
   });
   const selection = await page.evaluate(() => Object.fromEntries(new URL(location.href).searchParams));
   const environment = selection.environment || 'prod';
@@ -15,7 +15,7 @@ async (page) => {
     (!selection.level || Number(selection.level) === level));
   if (!scenarios.length) throw new Error(`No missions match ${JSON.stringify(selection)}`);
   const results = [];
-  for (const [scenario, level] of scenarios) {
+  for (const [scenario, level, surface] of scenarios) {
     const observations = [];
     let gitSourceSeen = false;
     let gitCommit = '';
@@ -62,7 +62,8 @@ async (page) => {
           }
           throw error;
         }
-        if (/\/gitea\/remotelab\/django-app\/src\/commit\/[0-9a-f]{40}\//.test(state.url)) gitSourceSeen = true;
+        // The demonstration opens the broken file at main before it repairs it.
+        if (!gitCommit && /\/gitea\/remotelab\/django-app\/src\/branch\/main\//.test(state.url)) gitSourceSeen = true;
         const commitView = state.url.match(/\/gitea\/remotelab\/django-app\/commit\/([0-9a-f]{40})(?:[?#]|$)/);
         if (commitView) gitCommit = commitView[1];
         if (observations.at(-1)?.check !== state.check || state.message || state.debrief) {
@@ -76,8 +77,10 @@ async (page) => {
             return (await response.json()).state;
           });
           outcome = runState === 'COMPLETED' ? 'completed' : `debrief with run ${runState}`;
-          if (scenario === 'missing-configmap' && outcome === 'completed' &&
-              (!gitSourceSeen || !gitCommit || gitCommit !== state.revision)) {
+          // A Git repair ends by reviewing, in Gitea, the commit Argo deployed.
+          const gitRepair = ['git', 'argo-and-git', 'terminal'].includes(surface);
+          if (gitRepair && outcome === 'completed' && (!gitCommit || gitCommit !== state.revision ||
+              (scenario === 'missing-configmap' && !gitSourceSeen))) {
             outcome = `Git demonstration incomplete: source=${gitSourceSeen}, commit=${gitCommit}, deployed=${state.revision}`;
           }
           break;

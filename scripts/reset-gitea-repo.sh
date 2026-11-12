@@ -58,12 +58,8 @@ creation_rules:
   - path_regex: '.*\.enc$'
     age: '${age_public_key}'
 EOF
-cat > "${work_dir}/secrets-plain.yaml" <<'EOF'
-secrets:
-  DB_PASSWORD: "remotelab"
-  SECRET_KEY: "django-production-secret-key-argo-remotelab-2024"
-  API_TOKEN: "tok_prod_abc123def456"
-EOF
+# The lab terminal holds the same known-good values for SOPS repairs.
+cp "${repo_root}/lab-terminal/known-good/secrets.yaml" "${work_dir}/secrets-plain.yaml"
 export SOPS_AGE_KEY_FILE="${repo_root}/secrets/keys/local.key"
 sops encrypt --age "${age_public_key}" --input-type yaml --output-type yaml \
   "${work_dir}/secrets-plain.yaml" > chart/django-app/secrets.yaml.enc
