@@ -448,7 +448,7 @@ def record_action(session, action, probe):
         if details.get("application") != session["application"]:
             result.update({"reason_code": "wrong_app", "message": "This Application is outside the incident. Check its environment label before acting."})
         elif collided:
-            result.update({"reason_code": "sync_while_running", "message": "An operation is already running. Read its status and terminate it before another sync."})
+            result.update({"reason_code": "sync_while_running", "message": "An operation is already running. Wait for it to finish, or terminate it if it's stuck, before syncing again."})
         elif kind == "resource_deleted" and session["pack"]["id"] == "orphaned-resource" and details.get("name") == "django":
             result.update({"reason_code": "deleted_live_workload", "message": "The live Deployment was deleted. Argo may recreate it; prune only the orphan after fixing the desired state."})
         elif kind == "rollback_requested":
