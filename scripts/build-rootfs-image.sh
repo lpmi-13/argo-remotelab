@@ -55,6 +55,29 @@ pull_if_missing() {
   docker pull "${image}"
 }
 
+# GHCR can reject the manifest with "unknown blob" when it is pushed right after
+# a large layer upload that the registry has not finished committing. A retry
+# skips layers that already exist, so it only re-sends the manifest.
+push_image() {
+  local image="$1"
+  local max_attempts=3
+  local attempt
+
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    echo "Pushing ${image} (attempt ${attempt}/${max_attempts})..."
+    if docker push "${image}"; then
+      return 0
+    fi
+    if ((attempt < max_attempts)); then
+      echo "warning: pushing ${image} failed; retrying in $((attempt * 15))s..." >&2
+      sleep "$((attempt * 15))"
+    fi
+  done
+
+  echo "error: pushing ${image} failed after ${max_attempts} attempts." >&2
+  return 1
+}
+
 copy_dir() {
   local source="$1"
   local destination_parent="$2"
@@ -133,8 +156,7 @@ done
 
 if [[ "${push_images}" != "0" ]]; then
   for image in "${first_party_images[@]}"; do
-    echo "Pushing ${image}..."
-    docker push "${image}"
+    push_image "${image}"
   done
 fi
 
@@ -168,8 +190,7 @@ docker build \
   "${build_context}"
 
 if [[ "${push_rootfs_image}" != "0" ]]; then
-  echo "Pushing ${rootfs_image}..."
-  docker push "${rootfs_image}"
+  push_image "${rootfs_image}"
 fi
 
 echo "Updating checked-in version references..."

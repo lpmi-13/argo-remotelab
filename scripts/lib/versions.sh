@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-readonly DEFAULT_FIRST_PARTY_IMAGE_TAG="v13"
+readonly DEFAULT_FIRST_PARTY_IMAGE_TAG="v14"
 readonly ROOTFS_IMAGE_REPO="ghcr.io/lpmi-13/argo-remotelab-k3s-rootfs"
-readonly DEFAULT_IXIMIUZ_ROOTFS_IMAGE="ghcr.io/lpmi-13/argo-remotelab-k3s-rootfs:v13"
+readonly DEFAULT_IXIMIUZ_ROOTFS_IMAGE="ghcr.io/lpmi-13/argo-remotelab-k3s-rootfs:v14"
 # This iximiuz base ships k3s v1.36.4+k3s1, matching LAB_K3S_VERSION's minor version.
 readonly DEFAULT_IXIMIUZ_ROOTFS_RELEASE="0f076c61"
 
